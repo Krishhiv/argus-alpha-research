@@ -23,6 +23,9 @@ env/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
+# pytest
+.pytest_cache/
+
 # macOS
 .DS_Store
 .AppleDouble
@@ -40,6 +43,7 @@ env/
 *.env
 secrets.py
 config/local.py
+.claude/
 
 # Logs and profiling
 *.log

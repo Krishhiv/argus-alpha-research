@@ -47,6 +47,17 @@ Session filter: **9:20–15:25 IST** (avoids open auction and close).
 ./sync_data.sh --dry-run # preview without transferring
 ```
 
+### Data quality
+
+Healthy files have **88,000–101,000 session rows** with a full 365-minute span and zero NaNs. Known bad files:
+
+| Instrument | Date | Issue |
+|---|---|---|
+| RELIANCE | 2026-05-20 | 12 session rows — corrupt/incomplete |
+| TCS | 2026-05-20 | File missing from sync |
+
+`load_depth` automatically rejects files below `MIN_SESSION_ROWS = 50,000` with a `ValueError`. Use `safe_load_depth` in loops to return `None` instead of raising.
+
 ---
 
 ## Project Structure
@@ -54,12 +65,16 @@ Session filter: **9:20–15:25 IST** (avoids open auction and close).
 ```
 research/
   data/
-    load_data.py       # data loading and derived columns
+    load_data.py         # data loading, derived columns, data quality guard
   features/
-    depth_features.py  # A1–A6 feature library
+    depth_features.py    # A1–A6 feature library
+  backtester/
+    engine.py            # event-driven backtester, cost model, trade log
   notebooks/
-    explore.ipynb      # single-day EDA (HDFCBANK 2026-05-06)
-    ic_analysis.ipynb  # IC/ICIR analysis across all instruments and dates
+    explore.ipynb        # single-day EDA (HDFCBANK 2026-05-06)
+    ic_analysis.ipynb    # IC/ICIR analysis across all instruments and dates
+tests/
+  test_backtester.py     # 28 smoke tests for the backtesting engine
 ```
 
 ---
@@ -75,6 +90,11 @@ Loads one day of depth data. Returns a DataFrame with:
 - `spread_ticks` — `spread / 0.05`
 - `obi` — full-book order book imbalance across all 20 levels
 - `obi_l1` — L1-only OBI (quantized and noisy — not used in signals)
+
+Raises `ValueError` if session rows < `MIN_SESSION_ROWS` (corrupt/incomplete file).  
+Raises `FileNotFoundError` if the parquet file doesn't exist.
+
+**`safe_load_depth(underlying, date, ...)`** — same as `load_depth` but returns `None` on bad files instead of raising. Use this in any loop over multiple files.
 
 **`load_pair(underlying_a, underlying_b, date)`** — asof-joins two instruments on `ts_ist`.
 
@@ -104,8 +124,8 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 **Methodology:**
 - Metric: Spearman rank IC (robust to outliers and non-linearity)
 - Forward return horizons: 5, 10, 20, 50 packets
-- Coverage: 4 instruments × ~16 trading days = up to 64 day×symbol IC observations
-- Look-ahead bias: eliminated by using previous-day `median(bid_qty_01)` to calibrate A5 and A6 thresholds. First day per instrument is skipped.
+- Coverage: 4 instruments × 15 trading days = 60 day×symbol IC observations (first day per instrument skipped — no previous-day calibration available)
+- Look-ahead bias: eliminated by using previous-day `median(bid_qty_01)` to calibrate A5 and A6 thresholds
 
 ### Signal Rankings (Horizon = 10 packets)
 
@@ -114,13 +134,9 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 | `a6_bid_shallowing` | -0.069 | -3.10 | 0.00 | **Core — always negative** |
 | `a6_ask_shallowing` | +0.061 | +3.16 | 1.00 | **Core — always positive** |
 | `a5_condensation_signal` | +0.054 | +2.12 | 0.95 | **Strong confirmation** |
-| `a3_symmetry_break` | +0.016 | +1.15 | 0.90 | Filter |
-| `a2_frag_bid` | +0.018 | +0.92 | 0.83 | Filter |
-| `obi` | +0.021 | +0.76 | 0.75 | Filter |
+| `obi` | +0.021 | +0.76 | 0.75 | Confirmation gate |
 | `a1_gradient_asymmetry` | -0.007 | -0.48 | 0.33 | **Drop** |
 | `a4_cog_divergence` | -0.008 | -0.40 | 0.35 | **Drop** |
-| `a3_symmetry_break_top` | +0.001 | +0.07 | 0.53 | **Drop** |
-| `a2_frag_ask` | -0.008 | -0.50 | 0.38 | **Drop** |
 
 **Key findings:**
 - A6 shallowing pair is the primary alpha. Both legs are perfectly directionally consistent (pct_pos = 0.0 and 1.0) across all 60 day×symbol pairs.
@@ -128,32 +144,50 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 - TCS shows materially weaker A6 signal than the banking names. Size down or filter separately.
 - Time-of-day: A5 and A6 are consistent across morning and afternoon — no session-specific logic needed.
 
----
+### Signal Combination
 
-## Signal Interpretation
+**Blend 1 — A6 + A5 (primary composite):**
+```
+score = 0.60 × (a6_ask_shallowing − a6_bid_shallowing) + 0.40 × a5_condensation_signal
+```
+Weights are ICIR-proportional (A6 ≈ 3.1, A5 ≈ 2.1).
 
-**Long signal conditions:**
-- `a6_ask_shallowing` rising (ask book thinning) — supply drying up
-- `a5_condensation_signal` positive (levels activating on bid side)
-- `obi` > 0, `a3_symmetry_break` > 0 (optional confirmation)
-
-**Short signal conditions:**
-- `a6_bid_shallowing` rising (bid book thinning) — demand drying up
-- `a5_condensation_signal` negative
-- `obi` < 0, `a3_symmetry_break` < 0 (optional confirmation)
+**Blend 2 — A6 + A5 with OBI gate:**
+Same composite score, but only enter if `obi` agrees with direction (positive for long, negative for short). Reduces trade count, targets higher win rate.
 
 ---
 
-## Cost Model (NSE Futures)
+## Backtester (`research/backtester/engine.py`)
+
+Event-driven, packet-by-packet simulation. No third-party frameworks.
+
+**`CostModel`** — NSE equity futures fee schedule (discount broker rates):
 
 | Cost | Rate |
 |---|---|
-| STT | 0.01% (sell side only) |
-| Exchange transaction charge | ~0.002% |
-| SEBI fee | ~0.0001% |
-| Brokerage | ~0.03% |
-| Stamp duty | 0.002% (buy side) |
-| Slippage | 1 tick (₹0.05) each way |
+| Brokerage | ₹20 flat per order (×2 per round trip) |
+| STT | 0.0125% — sell side only |
+| Exchange charge | 0.002% — both sides |
+| SEBI fee | 0.0001% — both sides |
+| Stamp duty | 0.002% — buy side only |
+| GST | 18% on brokerage + exchange + SEBI |
+| Slippage | 1 tick (₹0.05) each way — baked into execution price |
+
+On 1 lot HDFCBANK (~₹9L notional), total round-trip cost ≈ ₹225. Break-even requires ~8 ticks of favourable price movement.
+
+**`Backtester(signal_col, entry_threshold, max_hold, stop_ticks, ...)`**
+
+Key parameters:
+- `entry_threshold` — minimum `|score|` to open a position
+- `max_hold` — maximum packets to hold (default 20)
+- `stop_ticks` — stop loss in ticks from effective entry price (default 4)
+- `reversal_threshold` — optional early exit on signal flip (disabled by default)
+
+Exit conditions checked in order: `max_hold` → `stop` → `reversal` → `eod` (force-close at last packet).
+
+**`BacktestResult`** — trade log + cumulative PnL series. Exposes `win_rate`, `profit_factor`, `max_drawdown`, `daily_pnl()` for Sharpe calculation across multiple days.
+
+Run tests: `pyenv exec python -m pytest tests/test_backtester.py -v`
 
 ---
 
@@ -171,12 +205,12 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 ## Status
 
 - [x] Data sync pipeline (`sync_data.sh`)
-- [x] Data loader (`load_data.py`)
+- [x] Data loader with data quality guard (`load_data.py`)
 - [x] Feature library A1–A6 (`depth_features.py`)
 - [x] EDA notebook (`explore.ipynb`)
 - [x] IC analysis with look-ahead-free calibration (`ic_analysis.ipynb`)
-- [ ] Signal combination logic
-- [ ] Entry / exit mechanics
-- [ ] Backtesting engine
-- [ ] Full cost model integration
-- [ ] Walk-forward validation
+- [x] Backtesting engine with NSE cost model (`backtester/engine.py`)
+- [x] Smoke tests — 28 passing (`tests/test_backtester.py`)
+- [ ] Signal combination — compute composite score and verify ICIR improvement
+- [ ] Entry / exit parameter tuning in backtester
+- [ ] Walk-forward validation across all instruments and dates
