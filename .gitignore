@@ -48,3 +48,10 @@ config/local.py
 # Logs and profiling
 *.log
 *.prof
+
+# Generated cache files
+research/notebooks/_cache_*.csv
+trade_log_*.csv
+
+ALPHA_RESEARCH.md
+PAPER_TRADING_PLAN.md

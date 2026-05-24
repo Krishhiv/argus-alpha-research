@@ -336,6 +336,176 @@ def add_a6_impact_depth(
 
 
 # ---------------------------------------------------------------------------
+# Microprice (Stoikov 2018) — queue-weighted midprice
+# ---------------------------------------------------------------------------
+
+def add_microprice(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Microprice weights the L1 prices by OPPOSING-side queue size:
+
+        micro = (bid_price × ask_qty + ask_price × bid_qty) / (bid_qty + ask_qty)
+
+    When ask_qty is small (depleted), micro pulls toward ask_price → upward bias.
+    When bid_qty is small, micro pulls toward bid_price → downward bias.
+
+    `micro_deviation = micro - midprice` is the signed predictor.
+
+    From IC analysis: ICIR 6.9 at h=1, mean IC 0.147 at h=10 — the strongest
+    single signal in this codebase.
+
+    New columns:
+        microprice, micro_deviation
+    """
+    bid_p = df["bid_price_01"].to_numpy(float)
+    bid_q = df["bid_qty_01"].to_numpy(float)
+    ask_p = df["ask_price_01"].to_numpy(float)
+    ask_q = df["ask_qty_01"].to_numpy(float)
+
+    total_q = bid_q + ask_q
+    micro = (bid_p * ask_q + ask_p * bid_q) / (total_q + 1e-9)
+
+    out = df.copy()
+    out["microprice"]      = micro
+    out["micro_deviation"] = micro - df["midprice"].to_numpy(float)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Multi-level Order Flow Imbalance (Cont, Kukanov, Stoikov 2014; Kolm 2021)
+# ---------------------------------------------------------------------------
+
+def add_ofi_multilevel(
+    df: pd.DataFrame,
+    n_levels: int   = 10,
+    decay:    float = 0.5,
+) -> pd.DataFrame:
+    """
+    Per-level bid/ask flow contribution between packet t-1 and packet t:
+
+        e_b = qty_t            if price moved up    (new buy interest at higher bid)
+            = -qty_{t-1}       if price moved down  (cancellations at old bid)
+            = qty_t - qty_{t-1} if price unchanged   (net flow at same level)
+
+    Symmetric for ask (sign flipped — lower ask = bullish). Weighted sum across
+    top `n_levels` with exponential decay so L1 dominates.
+
+    OFI > 0 → net buying pressure; OFI < 0 → net selling pressure.
+
+    New column: ofi_ml
+    """
+    ofi_total = np.zeros(len(df))
+
+    for k in range(1, n_levels + 1):
+        weight = decay ** (k - 1)
+        bp = df[f"bid_price_{k:02d}"].to_numpy(float)
+        bq = df[f"bid_qty_{k:02d}"].to_numpy(float)
+        ap = df[f"ask_price_{k:02d}"].to_numpy(float)
+        aq = df[f"ask_qty_{k:02d}"].to_numpy(float)
+
+        bp_prev = np.roll(bp, 1); bq_prev = np.roll(bq, 1)
+        ap_prev = np.roll(ap, 1); aq_prev = np.roll(aq, 1)
+
+        e_b = np.where(bp > bp_prev, bq,
+              np.where(bp < bp_prev, -bq_prev, bq - bq_prev))
+        e_a = np.where(ap < ap_prev, aq,
+              np.where(ap > ap_prev, -aq_prev, aq - aq_prev))
+
+        ofi_total += weight * (e_b - e_a)
+
+    ofi_total[0] = 0  # first packet has no prior reference
+
+    out = df.copy()
+    out["ofi_ml"] = ofi_total
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Composite signal
+# ---------------------------------------------------------------------------
+
+COMPOSITE_ZSCORE_WINDOW = 100  # packets (~30–50 seconds of history)
+
+
+def _rolling_zscore(s: pd.Series, window: int) -> pd.Series:
+    mu  = s.rolling(window, min_periods=20).mean()
+    std = s.rolling(window, min_periods=20).std()
+    return (s - mu) / (std + 1e-9)
+
+
+def add_composite(
+    df: pd.DataFrame,
+    zscore_window: int = COMPOSITE_ZSCORE_WINDOW,
+) -> pd.DataFrame:
+    """
+    Equal-weight composite of A6 shallowing pair and A5 condensation signal.
+
+    Each component is rolling z-scored before combining so that differences
+    in raw scale do not give any one signal disproportionate weight.
+
+    Formula:
+        composite_eq = zscore(a6_ask_shallowing)
+                     - zscore(a6_bid_shallowing)   ← bid shallowing is bearish
+                     + zscore(a5_condensation_signal)
+
+    Requires A5 and A6 columns to already be present (call after add_all_features
+    or after add_a5_activation + add_a6_impact_depth).
+
+    New column:
+        composite_eq
+    """
+    required = ["a6_ask_shallowing", "a6_bid_shallowing", "a5_condensation_signal"]
+    missing  = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"add_composite requires columns: {missing}. Run add_all_features first.")
+
+    out = df.copy()
+    raw = (
+        _rolling_zscore(out["a6_ask_shallowing"],        zscore_window)
+        - _rolling_zscore(out["a6_bid_shallowing"],      zscore_window)
+        + _rolling_zscore(out["a5_condensation_signal"], zscore_window)
+    )
+    # Smooth with EMA (span=zscore_window) to remove packet-to-packet noise and
+    # create a slow-moving regime signal. Raw std ≈ √3 ≈ 1.73 is preserved.
+    out["composite_eq"] = raw.ewm(span=zscore_window, adjust=False).mean()
+    return out
+
+
+def add_flow_composite(
+    df: pd.DataFrame,
+    zscore_window: int = COMPOSITE_ZSCORE_WINDOW,
+    ema_span:      int = COMPOSITE_ZSCORE_WINDOW,
+) -> pd.DataFrame:
+    """
+    Flow-based composite emphasising micro_deviation (the strongest signal
+    found in IC analysis: ICIR 6.9 at h=1, 4.8 at h=10).
+
+    Weighting reflects per-signal ICIR:
+        flow_composite = EMA( 3·z(micro_deviation)
+                            + 1·z(ofi_ml)
+                            + 1·z(a6_ask_shallowing)
+                            − 1·z(a6_bid_shallowing) , span)
+
+    Requires `microprice`, `ofi_ml`, and A6 columns to be present.
+
+    New column: flow_composite
+    """
+    required = ["micro_deviation", "ofi_ml", "a6_ask_shallowing", "a6_bid_shallowing"]
+    missing  = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"add_flow_composite requires columns: {missing}")
+
+    out = df.copy()
+    z_micro = _rolling_zscore(out["micro_deviation"],   zscore_window)
+    z_ofi   = _rolling_zscore(out["ofi_ml"],            zscore_window)
+    z_ask   = _rolling_zscore(out["a6_ask_shallowing"], zscore_window)
+    z_bid   = _rolling_zscore(out["a6_bid_shallowing"], zscore_window)
+
+    raw = 3.0 * z_micro + 1.0 * z_ofi + 1.0 * z_ask - 1.0 * z_bid
+    out["flow_composite"] = raw.ewm(span=ema_span, adjust=False).mean()
+    return out
+
+
+# ---------------------------------------------------------------------------
 # A7 — Cross-Symbol Book Resonance (pair DataFrames)
 # ---------------------------------------------------------------------------
 
@@ -400,17 +570,20 @@ def add_all_features(
     velocity_window: int = 10,
     condensation_window: int = 20,
     shallowing_window: int = 20,
+    zscore_window: int = COMPOSITE_ZSCORE_WINDOW,
     size_threshold: int | None = None,
     order_size: float | None = None,
     order_size_lots: int = 20,
 ) -> pd.DataFrame:
     """
-    Apply A1–A6 to a single-instrument DataFrame from load_depth().
+    Apply A1–A6 and composite signal to a single-instrument DataFrame from load_depth().
 
     To avoid any look-ahead, pass size_threshold and order_size explicitly
     (e.g. derived from previous day's data). If left as None, both fall back
     to the instrument lot size (minimum positive L1 qty), which is a fixed
     NSE constant and is look-ahead-free.
+
+    Adds composite_eq as the final column — the primary trading signal.
     """
     df = add_a1_gradient(df, velocity_window=velocity_window)
     df = add_a2_fragmentation(df)
@@ -418,4 +591,8 @@ def add_all_features(
     df = add_a4_cog(df, velocity_window=velocity_window)
     df = add_a5_activation(df, size_threshold=size_threshold, condensation_window=condensation_window)
     df = add_a6_impact_depth(df, order_size=order_size, order_size_lots=order_size_lots, shallowing_window=shallowing_window)
+    df = add_microprice(df)
+    df = add_ofi_multilevel(df)
+    df = add_composite(df, zscore_window=zscore_window)
+    df = add_flow_composite(df, zscore_window=zscore_window, ema_span=zscore_window)
     return df

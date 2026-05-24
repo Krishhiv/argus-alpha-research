@@ -193,6 +193,8 @@ class Backtester:
         stop_ticks:         int            = 4,
         min_hold:           int            = 3,
         reversal_threshold: Optional[float] = None,
+        cooldown:           int            = 0,
+        fresh_cross:        bool           = False,
         lot_size:           float          = 550.0,
         n_lots:             int            = 1,
         cost_model:         Optional[CostModel] = None,
@@ -203,6 +205,8 @@ class Backtester:
         self.stop_ticks         = stop_ticks
         self.min_hold           = min_hold
         self.reversal_threshold = reversal_threshold
+        self.cooldown           = cooldown
+        self.fresh_cross        = fresh_cross
         self.lot_size           = lot_size
         self.n_lots             = n_lots
         self.costs              = cost_model or CostModel()
@@ -226,11 +230,13 @@ class Backtester:
         trades:         list[Trade] = []
         pnl_by_packet:  np.ndarray  = np.zeros(n)
 
-        in_position  = False
-        direction    = 0
-        entry_idx    = 0
-        entry_price  = 0.0
-        entry_ts_raw = None
+        in_position      = False
+        direction        = 0
+        entry_idx        = 0
+        entry_price      = 0.0
+        entry_ts_raw     = None
+        last_exit_packet = -(self.cooldown + 1)  # allow entry from packet 0
+        prev_abs_sig     = 0.0                   # for fresh_cross detection
 
         stop_distance = self.stop_ticks * TICK_SIZE
 
@@ -239,10 +245,17 @@ class Backtester:
             mid = midprice[i]
 
             if np.isnan(sig) or np.isnan(mid):
+                prev_abs_sig = 0.0
                 continue
 
+            abs_sig = abs(sig)
+
             if not in_position:
-                if abs(sig) >= self.entry_threshold:
+                cooldown_ok  = (i - last_exit_packet) > self.cooldown
+                threshold_ok = abs_sig >= self.entry_threshold
+                cross_ok     = (not self.fresh_cross) or (prev_abs_sig < self.entry_threshold)
+
+                if cooldown_ok and threshold_ok and cross_ok:
                     direction    = 1 if sig > 0 else -1
                     entry_price  = self.costs.effective_price(mid, direction, is_entry=True)
                     entry_idx    = i
@@ -274,7 +287,10 @@ class Backtester:
                     )
                     trades.append(trade)
                     pnl_by_packet[i] = trade.net_pnl
-                    in_position = False
+                    last_exit_packet  = i
+                    in_position       = False
+
+            prev_abs_sig = abs_sig
 
         if in_position:
             i = n - 1
@@ -285,6 +301,7 @@ class Backtester:
             )
             trades.append(trade)
             pnl_by_packet[i] += trade.net_pnl
+            last_exit_packet = i
 
         cum_pnl = pd.Series(pnl_by_packet, index=df["ts_ist"]).cumsum()
         return BacktestResult(trades=trades, cumulative_pnl=cum_pnl)
