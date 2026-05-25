@@ -1,0 +1,7 @@
+[Unit]
+Description=Stop Argus paper trader after market close
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/bin/systemctl stop argus-paper-trader.service

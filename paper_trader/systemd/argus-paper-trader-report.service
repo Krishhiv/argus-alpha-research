@@ -1,0 +1,15 @@
+[Unit]
+Description=Argus paper trading daily report and email
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/paper-trader
+EnvironmentFile=/home/ubuntu/collector-dhan/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/paper-trader/venv/bin/python -m paper_trader.report
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,10 @@
+[Unit]
+Description=Start paper trader at 09:10 IST (03:40 UTC) Mon–Fri
+
+[Timer]
+OnCalendar=Mon..Fri 03:40:00
+Unit=argus-paper-trader-start.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

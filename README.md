@@ -1,18 +1,18 @@
 # Argus Alpha Research
 
-Depth-feed-only alpha research system for NSE equity futures. All signals are derived exclusively from the 20-level order book (depth feed). The market feed is excluded — it has too much latency to be usable as a price reference. Midprice `(bid_price_01 + ask_price_01) / 2` is used as the LTP proxy.
+Depth-feed-only alpha research and paper trading system for NSE equity futures. All signals are derived exclusively from the 20-level order book (depth feed).
 
 ---
 
 ## Universe
 
-| Instrument | Notes |
-|---|---|
-| HDFCBANK | Primary development instrument |
-| ICICIBANK | |
-| RELIANCE | |
-| TCS | Weaker A6 signal — size down |
-| BAJFINANCE | **Excluded** — data quality too poor |
+| Instrument | Lot Size | Notes |
+|---|---|---|
+| HDFCBANK | 550 | Primary development instrument |
+| ICICIBANK | 700 | |
+| RELIANCE | 500 | |
+| TCS | 175 | Weaker A6 signal — size down |
+| BAJFINANCE | — | **Excluded** — data quality too poor |
 
 ---
 
@@ -43,8 +43,8 @@ Session filter: **9:20–15:25 IST** (avoids open auction and close).
 ### Syncing data
 
 ```bash
-./sync_data.sh           # live sync from VPS
-./sync_data.sh --dry-run # preview without transferring
+./sync_market_data.sh   # sync only market feed from VPS
+./sync_data.sh          # sync full depth feed
 ```
 
 ### Data quality
@@ -65,103 +65,77 @@ Healthy files have **88,000–101,000 session rows** with a full 365-minute span
 ```
 research/
   data/
-    load_data.py         # data loading, derived columns, data quality guard
+    load_data.py              # data loading, derived columns, data quality guard
   features/
-    depth_features.py    # A1–A6 feature library
+    depth_features.py         # A1–A6 feature library + microprice deviation
   backtester/
-    engine.py            # event-driven backtester, cost model, trade log
+    maker_engine.py           # maker strategy backtester and cost model
+    maker_walkforward.py      # walk-forward runner, grid search, trade log export
   notebooks/
-    explore.ipynb        # single-day EDA (HDFCBANK 2026-05-06)
-    ic_analysis.ipynb    # IC/ICIR analysis across all instruments and dates
+    explore.ipynb             # single-day EDA (HDFCBANK 2026-05-06)
+    ic_analysis.ipynb         # IC/ICIR analysis across all instruments and dates
+    signal_combination.ipynb  # composite signal construction
+paper_trader/
+  config.py                   # all strategy and runtime parameters
+  signal.py                   # microprice deviation computation
+  broker.py                   # per-instrument stateful order simulator
+  logger.py                   # append-only CSV event logger
+  report.py                   # daily P&L report emailer
+  main.py                     # asyncio entry point
+  feed_client.py              # Dhan depth + market websocket clients
+  dhan_parser.py              # Dhan binary packet parser (depth + market)
+  contracts.py                # front-month contract resolver (instrument master CSV)
+  logs/                       # paper_trades.csv, paper_orders.csv, paper_pnl.csv
+  systemd/                    # 7 systemd service and timer unit files
+  requirements.txt
+  DEPLOY.md
 tests/
-  test_backtester.py     # 28 smoke tests for the backtesting engine
+  test_backtester.py          # 28 tests for backtesting engine
+  test_features.py            # smoke tests for feature library
+  test_maker_engine.py        # tests for maker strategy engine
+  test_paper_trader.py        # 37 tests for paper trader modules
+run_oos_validation.py         # out-of-sample validation runner
 ```
 
 ---
 
-## Data Loader (`research/data/load_data.py`)
+## Signal: Microprice Deviation
 
-**`load_depth(underlying, date, session_filter=True, path=None)`**
+The primary trading signal is **microprice deviation** from the L1 order book:
 
-Loads one day of depth data. Returns a DataFrame with:
-- `ts_ist` — IST timestamp (tz-naive)
-- `midprice` — `(bid_price_01 + ask_price_01) / 2`
-- `spread` — `ask_price_01 - bid_price_01` (discrete, tick-grid multiples of ₹0.05)
-- `spread_ticks` — `spread / 0.05`
-- `obi` — full-book order book imbalance across all 20 levels
-- `obi_l1` — L1-only OBI (quantized and noisy — not used in signals)
-
-Raises `ValueError` if session rows < `MIN_SESSION_ROWS` (corrupt/incomplete file).  
-Raises `FileNotFoundError` if the parquet file doesn't exist.
-
-**`safe_load_depth(underlying, date, ...)`** — same as `load_depth` but returns `None` on bad files instead of raising. Use this in any loop over multiple files.
-
-**`load_pair(underlying_a, underlying_b, date)`** — asof-joins two instruments on `ts_ist`.
-
-**`extract_arrays(df, suffix="")`** — returns dict of `(N, 20)` numpy arrays for fast vectorised feature computation.
-
----
-
-## Feature Library (`research/features/depth_features.py`)
-
-All features are vectorised (no row-by-row loops). Rolling windows are in **packets**, not seconds.
-
-> **Calibration rule:** A5 and A6 require a size threshold calibrated from data. Always pass `size_threshold` and `order_size` from the **previous day's** `median(bid_qty_01)` to avoid look-ahead bias. Never let these fall back to same-day computation in live or backtest code.
-
-| Feature | Columns | Description |
-|---|---|---|
-| **A1** Institutional Footprint Gradient | `a1_gradient_asymmetry` | Linear slope of avg order size across levels 1–20; asymmetry between bid and ask velocity. **Dropped — ICIR < 0.5.** |
-| **A2** Order Fragmentation | `a2_frag_bid`, `a2_frag_ask` | Entropy of order count distribution across levels. High entropy = fragmented book. `a2_frag_bid` is useful; `a2_frag_ask` is noisy. |
-| **A3** Book Symmetry Break | `a3_symmetry_break`, `a3_symmetry_break_top`, `a3_symmetry_break_deep` | Compares bid vs ask quantity distribution shape. `a3_symmetry_break` (full book) is the useful variant. |
-| **A4** Gravity Center Migration | `a4_cog_divergence` | Centre-of-gravity of volume across levels. **Dropped — ICIR < 0.5.** |
-| **A5** Level Activation Pattern | `a5_condensation_signal` | Counts active (above-threshold) levels; condensation signal = rolling rate of change. Positive = levels activating = bullish. |
-| **A6** Liquidity Half-Life | `a6_bid_shallowing`, `a6_ask_shallowing` | Simulates a fixed-size market order; measures how many levels it consumes. Rolling shallowing = book getting thinner over time. **Strongest signal.** |
-
----
-
-## IC Analysis (`research/notebooks/ic_analysis.ipynb`)
-
-**Methodology:**
-- Metric: Spearman rank IC (robust to outliers and non-linearity)
-- Forward return horizons: 5, 10, 20, 50 packets
-- Coverage: 4 instruments × 15 trading days = 60 day×symbol IC observations (first day per instrument skipped — no previous-day calibration available)
-- Look-ahead bias: eliminated by using previous-day `median(bid_qty_01)` to calibrate A5 and A6 thresholds
-
-### Signal Rankings (Horizon = 10 packets)
-
-| Signal | Mean IC | ICIR | Pct Positive | Verdict |
-|---|---|---|---|---|
-| `a6_bid_shallowing` | -0.069 | -3.10 | 0.00 | **Core — always negative** |
-| `a6_ask_shallowing` | +0.061 | +3.16 | 1.00 | **Core — always positive** |
-| `a5_condensation_signal` | +0.054 | +2.12 | 0.95 | **Strong confirmation** |
-| `obi` | +0.021 | +0.76 | 0.75 | Confirmation gate |
-| `a1_gradient_asymmetry` | -0.007 | -0.48 | 0.33 | **Drop** |
-| `a4_cog_divergence` | -0.008 | -0.40 | 0.35 | **Drop** |
-
-**Key findings:**
-- A6 shallowing pair is the primary alpha. Both legs are perfectly directionally consistent (pct_pos = 0.0 and 1.0) across all 60 day×symbol pairs.
-- IC is horizon-flat from h=5 to h=50 packets (~2–25 seconds). Signal does not decay quickly, giving flexibility on hold time.
-- TCS shows materially weaker A6 signal than the banking names. Size down or filter separately.
-- Time-of-day: A5 and A6 are consistent across morning and afternoon — no session-specific logic needed.
-
-### Signal Combination
-
-**Blend 1 — A6 + A5 (primary composite):**
 ```
-score = 0.60 × (a6_ask_shallowing − a6_bid_shallowing) + 0.40 × a5_condensation_signal
+microprice       = (bid_price × ask_qty + ask_price × bid_qty) / (bid_qty + ask_qty)
+micro_deviation  = microprice − mid
 ```
-Weights are ICIR-proportional (A6 ≈ 3.1, A5 ≈ 2.1).
 
-**Blend 2 — A6 + A5 with OBI gate:**
-Same composite score, but only enter if `obi` agrees with direction (positive for long, negative for short). Reduces trade count, targets higher win rate.
+A large positive deviation indicates bid-side pressure (bullish); large negative indicates ask-side pressure (bearish). ICIR of **6.9** at h=1 packet in in-sample analysis.
+
+**Entry threshold:** `|micro_deviation| ≥ 0.20`  
+**Signal column:** `micro_deviation` (computed in `paper_trader/signal.py` and `research/features/depth_features.py`)
 
 ---
 
-## Backtester (`research/backtester/engine.py`)
+## Maker Strategy
 
-Event-driven, packet-by-packet simulation. No third-party frameworks.
+Passive limit order strategy that earns the spread rather than paying it.
 
-**`CostModel`** — NSE equity futures fee schedule (discount broker rates):
+**Entry:** On a fresh threshold cross, post a limit order at the current L1 bid (BUY) or ask (SELL). "Fresh cross" requires `prev_abs_sig < threshold` so the strategy does not re-enter on a sustained signal.
+
+**Fill detection — 2-layer gate:**
+- **Layer 1 (depth):** BUY fills when `bid_price_01 < posted_price` (aggressive sellers consumed our level). SELL fills when `ask_price_01 > posted_price`.
+- **Layer 2 (market feed):** LTP must confirm a print at or beyond the posted price, and the market feed packet must be less than 5 seconds stale.
+
+**Queue position approximation:** `queue_ahead = bid_qty_01` at post time; `qty_consumed` = cumulative drop in L1 bid qty since post. Fills where `qty_consumed < queue_ahead` are flagged as `queue_doubt` in the trade log.
+
+**Exit (maker):** Post a passive limit at the current ask (long) or bid (short). Exit fires when the book moves through the posted exit price.
+
+**Exit (taker fallback):** If the position is held for `MAX_HOLD_PACKETS = 500` packets (~200 seconds) without a passive exit, exit at mid ± 1 tick.
+
+**Cooldown:** `ORDER_TIMEOUT_PKTS = 10` packets between a cancel/exit and the next entry.
+
+---
+
+## Fee Model (NSE Equity Futures, Dhan)
 
 | Cost | Rate |
 |---|---|
@@ -171,46 +145,164 @@ Event-driven, packet-by-packet simulation. No third-party frameworks.
 | SEBI fee | 0.0001% — both sides |
 | Stamp duty | 0.002% — buy side only |
 | GST | 18% on brokerage + exchange + SEBI |
-| Slippage | 1 tick (₹0.05) each way — baked into execution price |
 
-On 1 lot HDFCBANK (~₹9L notional), total round-trip cost ≈ ₹225. Break-even requires ~8 ticks of favourable price movement.
-
-**`Backtester(signal_col, entry_threshold, max_hold, stop_ticks, ...)`**
-
-Key parameters:
-- `entry_threshold` — minimum `|score|` to open a position
-- `max_hold` — maximum packets to hold (default 20)
-- `stop_ticks` — stop loss in ticks from effective entry price (default 4)
-- `reversal_threshold` — optional early exit on signal flip (disabled by default)
-
-Exit conditions checked in order: `max_hold` → `stop` → `reversal` → `eod` (force-close at last packet).
-
-**`BacktestResult`** — trade log + cumulative PnL series. Exposes `win_rate`, `profit_factor`, `max_drawdown`, `daily_pnl()` for Sharpe calculation across multiple days.
-
-Run tests: `pyenv exec python -m pytest tests/test_backtester.py -v`
+On 1 lot HDFCBANK (~₹9L notional), total round-trip cost ≈ ₹208. STT is applied to the sell-side notional, so fees are slightly asymmetric between long and short trades (~₹0.28 difference at current prices).
 
 ---
 
-## Performance Targets
+## Out-of-Sample Validation
+
+Run: `python run_oos_validation.py`
+
+| Period | Dates | Sessions |
+|---|---|---|
+| Train | 2026-04-24 – 2026-05-15 | 15 days |
+| Test (OOS) | 2026-05-18 – 2026-05-22 | 5 days |
+
+**Parameters used:** `entry_threshold=0.20`, `max_hold=500`, `order_timeout=10`, `exit_mode='maker'`, `fresh_cross=True`
+
+Produces `trade_log_train.csv` and `trade_log_oos.csv` with 18 columns per trade (entry/exit timestamps, prices, methods, lot size, notional, hold duration, gross P&L, fee, net P&L).
+
+> **Caveat:** OOS Sharpe of 11–18 is almost certainly optimistic. Backtest fill model assumes no queue position and no adverse selection. Statistically meaningless with 5 daily observations (SE ≈ ±4–5 Sharpe units). Realistic live Sharpe estimate: 1–5. The paper trading phase exists to measure actual fill rate and net P&L before committing capital.
+
+---
+
+## Walk-Forward Runner
+
+`research/backtester/maker_walkforward.py` provides:
+
+- **`run_maker_walkforward(sessions, params, lot_sizes)`** — streams one session at a time (memory-safe), returns `MakerWalkForwardResult` with per-day P&L, Sharpe, and a full `trade_log` DataFrame.
+- **`maker_grid_search(sessions, param_grid, lot_sizes)`** — exhaustive parameter grid search, returns ranked results.
+- **`MakerWalkForwardResult.save_trade_log(path)`** — exports the trade log to CSV.
+
+Per-instrument lot sizes are applied correctly: `LOT_SIZES = {"HDFCBANK": 550, "ICICIBANK": 700, "RELIANCE": 500, "TCS": 175}`.
+
+---
+
+## Paper Trader
+
+A live paper trading environment that connects to Dhan's real-time feeds and simulates the maker strategy against actual order flow. No orders are sent to Dhan; all P&L is hypothetical.
+
+### Architecture
+
+```
+main.py
+  ├── contracts.py       resolve current security_ids from instrument master CSV
+  ├── feed_client.py     two asyncio tasks (depth feed + market feed)
+  │     └── dhan_parser.py   binary packet parser
+  └── broker.py × 4     one PaperBroker per instrument
+        └── logger.py    append-only CSV writes (trades, orders, PnL snapshots)
+```
+
+On SIGTERM (sent by the stop timer at 15:35 IST), open positions are force-closed at the last known mid price before the process exits.
+
+### Contract Resolution
+
+`paper_trader/contracts.py` reads `INSTRUMENT_MASTER_PATH` from the shared `.env` (the same file the collector uses) and resolves the current front-month futures `security_id` for each instrument at startup. No manual updates required on monthly expiry rolls — the instrument master is refreshed daily by the collector.
+
+### Systemd Units
+
+Deployed on the same VPS as the data collector. The paper trader symlinks the collector's `.env` to reuse auth credentials and file paths.
+
+| Timer | UTC | IST | Purpose |
+|---|---|---|---|
+| `argus-paper-trader-start` | 03:40 | 09:10 | Start process before market open |
+| `argus-paper-trader-stop` | 10:05 | 15:35 | Graceful stop after market close |
+| `argus-paper-trader-report` | 10:20 | 15:50 | Email daily P&L report |
+
+The main service (`argus-paper-trader.service`) has `Restart=on-failure` — it recovers from mid-session crashes automatically. The stop timer sends SIGTERM, which triggers clean shutdown (not a failure restart).
+
+### Daily Report
+
+`paper_trader/report.py` runs at 15:50 IST via systemd. It reads today's `paper_trades.csv`, computes trade-level statistics (n_trades, net P&L, win rate, avg net, exit method breakdown, per-instrument breakdown), and emails the report to the configured address via Gmail SMTP.
+
+### Deployment
+
+See `paper_trader/DEPLOY.md` for the full setup guide. Summary:
+
+```bash
+# On VPS (first time)
+git clone <repo> /home/ubuntu/paper-trader
+cd /home/ubuntu/paper-trader
+python3 -m venv venv && venv/bin/pip install -r paper_trader/requirements.txt
+ln -s /home/ubuntu/collector-dhan/.env .env
+sudo cp paper_trader/systemd/*.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now argus-paper-trader-{start,stop,report}.timer
+
+# After pushing changes
+ssh lightsail-mumbai "cd /home/ubuntu/paper-trader && git pull"
+```
+
+### Paper Trading Success Criteria (20-day evaluation)
 
 | Metric | Target |
 |---|---|
-| Net Sharpe ratio | ≥ 1.5 |
-| Win rate | ≥ 52% |
-| Profit factor | ≥ 1.3 |
-| Max drawdown | < 20% |
+| Fill rate | ≥ 6% of posted orders |
+| Win rate | ≥ 60% |
+| Net P&L per trade | ≥ ₹15 |
+| Layer-2 confirmation rate | ≥ 70% of fills |
+
+---
+
+## Feature Library (`research/features/depth_features.py`)
+
+All features are vectorised (no row-by-row loops). Rolling windows are in **packets**, not seconds.
+
+> **Calibration rule:** A5 and A6 require a size threshold calibrated from data. Always pass `size_threshold` and `order_size` from the **previous day's** `median(bid_qty_01)` to avoid look-ahead bias.
+
+| Feature | Columns | ICIR (h=10) | Verdict |
+|---|---|---|---|
+| **A6** Liquidity Half-Life | `a6_bid_shallowing`, `a6_ask_shallowing` | ±3.1 | **Core signal** |
+| **A5** Level Activation | `a5_condensation_signal` | +2.12 | Strong confirmation |
+| **A3** Book Symmetry Break | `a3_symmetry_break` | — | Confirmation gate |
+| **A2** Order Fragmentation | `a2_frag_bid` | — | Weak |
+| **A1** Institutional Gradient | `a1_gradient_asymmetry` | -0.48 | **Dropped** |
+| **A4** Gravity Center Migration | `a4_cog_divergence` | -0.40 | **Dropped** |
+| **Microprice Deviation** | `micro_deviation` | 6.9 (h=1) | **Primary signal (live)** |
+
+---
+
+## IC Analysis Summary
+
+- **Method:** Spearman rank IC, horizons h=1,5,10,20,50 packets
+- **Coverage:** 4 instruments × 15 trading days = 60 day×symbol observations
+- **A6 shallowing pair:** directionally consistent across 100% of observations (pct_pos = 0.0 and 1.0). IC is horizon-flat from h=5 to h=50 packets.
+- **Microprice deviation:** ICIR 6.9 at h=1, used as the live trading signal due to low latency requirement of the maker strategy.
+- **TCS:** materially weaker signal than the banking names — size down.
+
+---
+
+## Tests
+
+| File | Tests | Coverage |
+|---|---|---|
+| `tests/test_backtester.py` | 28 | Backtesting engine, cost model |
+| `tests/test_features.py` | — | Feature library smoke tests |
+| `tests/test_maker_engine.py` | — | Maker engine |
+| `tests/test_paper_trader.py` | 37 | Signal math, broker state machine, binary parser, contract resolution |
+
+Run all tests:
+```bash
+python -m pytest tests/ -v
+```
 
 ---
 
 ## Status
 
-- [x] Data sync pipeline (`sync_data.sh`)
-- [x] Data loader with data quality guard (`load_data.py`)
-- [x] Feature library A1–A6 (`depth_features.py`)
-- [x] EDA notebook (`explore.ipynb`)
-- [x] IC analysis with look-ahead-free calibration (`ic_analysis.ipynb`)
-- [x] Backtesting engine with NSE cost model (`backtester/engine.py`)
-- [x] Smoke tests — 28 passing (`tests/test_backtester.py`)
-- [ ] Signal combination — compute composite score and verify ICIR improvement
-- [ ] Entry / exit parameter tuning in backtester
-- [ ] Walk-forward validation across all instruments and dates
+- [x] Data sync pipeline
+- [x] Data loader with quality guard
+- [x] Feature library A1–A6
+- [x] IC/ICIR analysis (A6 + microprice are primary signals)
+- [x] Maker strategy backtester with NSE cost model
+- [x] Walk-forward validation with per-instrument lot sizes
+- [x] OOS validation (train: 15 days, test: 5 days)
+- [x] Trade log CSV export
+- [x] Paper trader — full environment (broker, logger, report, systemd)
+- [x] Paper trader — Dhan websocket connections (depth + market feed)
+- [x] Paper trader — auto contract resolution from instrument master
+- [x] Paper trader — 37 unit tests (37/37 passing)
+- [ ] Deploy paper trader to VPS
+- [ ] 20-day live paper trading run
+- [ ] Evaluate against success criteria → decision on Phase 2 (live capital)

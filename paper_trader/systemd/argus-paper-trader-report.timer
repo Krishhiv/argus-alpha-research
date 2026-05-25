@@ -1,0 +1,10 @@
+[Unit]
+Description=Run paper trading report at 15:50 IST (10:20 UTC) Mon–Fri
+
+[Timer]
+OnCalendar=Mon..Fri 10:20:00
+Unit=argus-paper-trader-report.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

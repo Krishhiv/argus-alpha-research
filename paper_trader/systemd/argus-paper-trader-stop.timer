@@ -1,0 +1,10 @@
+[Unit]
+Description=Stop paper trader at 15:35 IST (10:05 UTC) Mon–Fri
+
+[Timer]
+OnCalendar=Mon..Fri 10:05:00
+Unit=argus-paper-trader-stop.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

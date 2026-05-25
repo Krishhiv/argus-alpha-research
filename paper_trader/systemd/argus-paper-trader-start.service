@@ -1,0 +1,8 @@
+[Unit]
+Description=Start Argus paper trader at market open
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/bin/systemctl start argus-paper-trader.service
