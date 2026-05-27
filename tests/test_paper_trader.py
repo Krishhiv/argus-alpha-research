@@ -7,7 +7,6 @@ contract resolution. No network, no filesystem side effects (tmp_path for CSV).
 
 from __future__ import annotations
 
-import csv
 import struct
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -37,13 +36,6 @@ def _depth(broker: PaperBroker, bid_p: float, bid_q: int, ask_p: float, ask_q: i
     broker.on_depth_packet(
         ts_utc=datetime.now(UTC), bid_price=bid_p, bid_qty=bid_q,
         ask_price=ask_p, ask_qty=ask_q,
-    )
-
-
-def _market(broker: PaperBroker, ltp: float, age_secs: float = 0.5) -> None:
-    now = datetime.now(UTC)
-    broker.on_market_packet(
-        ltp=ltp, ltt_utc=now - timedelta(seconds=age_secs), recv_utc=now,
     )
 
 
@@ -159,7 +151,7 @@ class TestBrokerCancel:
         assert br._position_side == 0
 
 
-# ── Broker — fill detection (2-layer gate) ────────────────────────────────────
+# ── Broker — fill detection (depth-only) ─────────────────────────────────────
 
 class TestBrokerFill:
     def _broker_pending_buy(self) -> PaperBroker:
@@ -167,37 +159,15 @@ class TestBrokerFill:
         _depth(br, *_BUY)           # posts BUY at 100.0
         return br
 
-    def test_no_fill_without_market_feed(self):
-        # Layer 2 requires a valid market packet — fill must not happen without one
+    def test_buy_fill_depth_only(self):
         br = self._broker_pending_buy()
-        _depth(br, 99.5, 500, 101.0, 10)   # bid < 100.0 but no market feed
-        assert br.n_fills == 0
-        assert br._pending_entry is not None
-
-    def test_buy_fill_layer2_confirmed(self):
-        br = self._broker_pending_buy()
-        _market(br, ltp=99.8, age_secs=0.5)     # ltp ≤ posted=100.0, fresh
         _depth(br, 99.5, 500, 101.0, 10)        # bid < 100.0 → fill
         assert br.n_fills == 1
         assert br._position_side == 1
 
-    def test_stale_market_feed_blocks_fill(self):
-        br = self._broker_pending_buy()
-        _market(br, ltp=99.8, age_secs=10.0)    # older than MARKET_FEED_STALE_SECS=5
-        _depth(br, 99.5, 500, 101.0, 10)
-        assert br.n_fills == 0
-
-    def test_high_ltp_blocks_fill(self):
-        # Market feed shows ltp > posted_price → trade at our level is not confirmed
-        br = self._broker_pending_buy()
-        _market(br, ltp=100.5, age_secs=0.5)    # ltp > posted=100.0
-        _depth(br, 99.5, 500, 101.0, 10)
-        assert br.n_fills == 0
-
     def test_sell_fill(self):
         br = PaperBroker("HDFCBANK")
         _depth(br, *_SELL)                       # posts SELL at 101.0
-        _market(br, ltp=101.2, age_secs=0.5)     # ltp ≥ posted=101.0
         _depth(br, 100.0, 10, 101.5, 500)        # ask > 101.0 → fill
         assert br.n_fills == 1
         assert br._position_side == -1
@@ -210,8 +180,7 @@ class TestBrokerExit:
         """Returns a broker that has just filled a long at 100.0."""
         br = PaperBroker("HDFCBANK")
         _depth(br, *_BUY)                        # post BUY at 100.0
-        _market(br, ltp=99.8, age_secs=0.5)
-        _depth(br, 99.5, 500, 101.0, 10)         # fill
+        _depth(br, 99.5, 500, 101.0, 10)         # bid < 100.0 → fill
         assert br.n_fills == 1
         return br
 
@@ -268,15 +237,10 @@ class TestBrokerQueueDoubt:
         br = PaperBroker("HDFCBANK")
         # Post at bid=100.0 with large bid_qty → large queue_ahead
         _depth(br, 100.0, 10_000, 101.0, 10)    # queue_ahead = 10_000
-        _market(br, ltp=99.5, age_secs=0.5)
         # bid drops (L1 fill candidate) but only 100 qty consumed (bid_qty drops 100)
         _depth(br, 99.5, 9_900, 101.0, 10)      # qty_consumed = max(0, 10000-9900) = 100
-        # Layer 1: bid=99.5 < posted=100.0 ✓; Layer 2: ltp=99.5 ≤ 100.0 ✓
-        # But qty_consumed=100 < queue_ahead=10000 → queue_doubt
+        # bid=99.5 < posted=100.0 → depth-only fill; qty_consumed=100 < queue_ahead=10000
         assert br.n_fills == 1
-        # fill_layer field is set at fill time; it's in the order log, not trade log here
-        # Check _fill_layer indirectly via log by inspecting the trade logged after close
-        # (fill_layer in the trade dict is set to "" at close, was set at fill time in log)
 
 
 # ── Dhan binary parser ────────────────────────────────────────────────────────
@@ -369,15 +333,17 @@ def _csv_row(sym: str, sec_id: int, expiry: str, lot: int = 550) -> str:
 
 class TestContracts:
     def test_resolves_nearest_expiry(self, tmp_path: Path):
+        near   = (datetime.now(UTC).date() + timedelta(days=7)).isoformat()
+        far    = (datetime.now(UTC).date() + timedelta(days=35)).isoformat()
         csv_file = tmp_path / "master.csv"
         csv_file.write_text(
             _CSV_HEADER
-            + _csv_row("HDFCBANK", 66180, "2026-05-26")
-            + _csv_row("HDFCBANK", 67000, "2026-06-26")  # next month
+            + _csv_row("HDFCBANK", 66180, near)
+            + _csv_row("HDFCBANK", 67000, far)   # next month
         )
         with patch.dict("os.environ", {"INSTRUMENT_MASTER_PATH": str(csv_file)}):
             result = resolve_security_ids(["HDFCBANK"])
-        assert result["HDFCBANK"] == 66180   # picks nearest, not later
+        assert result["HDFCBANK"] == 66180   # picks nearest non-expired, not later
 
     def test_skips_expired_contracts(self, tmp_path: Path):
         yesterday = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()

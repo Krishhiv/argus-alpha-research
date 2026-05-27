@@ -1,9 +1,9 @@
 """
 Argus paper trader — entry point.
 
-Two concurrent asyncio tasks run the Dhan depth and market feed websockets.
+One asyncio task drives the Dhan depth feed websocket.
 Depth packets drive per-instrument PaperBroker state machines.
-Market packets update the LTP cache used for Layer 2 fill confirmation.
+Fill detection uses depth-only (Layer 1): no market feed connection needed.
 Shuts down cleanly on SIGTERM/SIGINT, force-closing any open position at mid.
 """
 
@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from paper_trader.broker import PaperBroker
 from paper_trader.config import INSTRUMENTS
 from paper_trader.contracts import resolve_security_ids
-from paper_trader.feed_client import run_depth_feed, run_market_feed
+from paper_trader.feed_client import run_depth_feed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -83,33 +83,18 @@ async def async_main() -> None:
                 ask_qty=ask_qty,
             )
 
-    def on_market(
-        underlying: str,
-        ltp: float,
-        ltt_utc: datetime,
-        recv_utc: datetime,
-    ) -> None:
-        br = brokers.get(underlying)
-        if br is not None:
-            br.on_market_packet(ltp=ltp, ltt_utc=ltt_utc, recv_utc=recv_utc)
-
     log.info("Starting Argus paper trader — instruments: %s", INSTRUMENTS)
 
-    depth_task  = asyncio.create_task(
+    depth_task = asyncio.create_task(
         run_depth_feed(access_token, client_id, on_depth, security_ids),
         name="depth-feed",
-    )
-    market_task = asyncio.create_task(
-        run_market_feed(access_token, client_id, on_market, security_ids),
-        name="market-feed",
     )
 
     await stop_event.wait()
 
     log.info("Stopping feed tasks")
     depth_task.cancel()
-    market_task.cancel()
-    await asyncio.gather(depth_task, market_task, return_exceptions=True)
+    await asyncio.gather(depth_task, return_exceptions=True)
     log.info("Paper trader stopped")
 
 

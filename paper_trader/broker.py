@@ -1,18 +1,14 @@
 """
 PaperBroker — stateful per-instrument order simulator.
 
-One PaperBroker instance per instrument. Fed depth packets and market
-packets independently. Uses a 2-layer fill gate:
-
-    Layer 1 (depth)  : bid_price_01 drops below posted BUY price
-                       ask_price_01 rises above posted SELL price
-    Layer 2 (market) : ltp confirms a trade printed at/beyond our level
-                       AND market feed is not stale (< MARKET_FEED_STALE_SECS)
+One PaperBroker instance per instrument. Driven entirely by the depth feed.
+Fill detection uses Layer 1 only (depth): BUY fills when bid_price_01 drops
+below the posted price; SELL fills when ask_price_01 rises above it.
+This matches the backtester's fill model exactly.
 
 Queue position approximation (logged but not blocking):
     queue_ahead  = bid_qty_01 at time of post
     qty_consumed = cumulative drop in bid_qty_01 since post
-    If fill confirmed but qty_consumed < queue_ahead → logged as 'queue_doubt'
 
 No orders ever reach Dhan. All PnL is hypothetical.
 """
@@ -20,14 +16,13 @@ No orders ever reach Dhan. All PnL is hypothetical.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from paper_trader.config import (
     LOT_SIZES, ENTRY_THRESHOLD, MAX_HOLD_PACKETS,
     ORDER_TIMEOUT_PKTS, N_LOTS, TICK_SIZE,
-    MARKET_FEED_STALE_SECS,
 )
 from paper_trader.logger import log_trade, log_order_event, log_pnl_snapshot
 from paper_trader.signal import compute_micro_deviation
@@ -74,7 +69,7 @@ class PaperBroker:
     """
     Simulates one instrument's order flow in real time.
     Call on_depth_packet() on every depth websocket message.
-    Call on_market_packet() on every market (LTP) websocket message.
+    on_market_packet() is a no-op — fill detection uses depth only.
     """
 
     def __init__(self, underlying: str) -> None:
@@ -93,14 +88,9 @@ class PaperBroker:
         self._prev_abs_sig     = 0.0
         self._last_exit_packet = -(ORDER_TIMEOUT_PKTS + 1)
 
-        # Market feed state
-        self._ltp              = float("nan")
-        self._ltt_utc: Optional[datetime] = None
-        self._last_market_recv: Optional[datetime] = None
-
         # Accumulators
-        self.n_posts  = 0
-        self.n_fills  = 0
+        self.n_posts   = 0
+        self.n_fills   = 0
         self.n_cancels = 0
         self.cum_net_pnl = 0.0
         self.trades: list[dict] = []
@@ -109,23 +99,21 @@ class PaperBroker:
         self._trading_date = ""
         self.last_mid      = 0.0   # most recent (bid+ask)/2; used by shutdown handler
 
-    # ── Market feed ───────────────────────────────────────────────────────────
+    # ── Market feed (no-op — Dhan only allows one connection per account) ──────
 
     def on_market_packet(self, ltp: float, ltt_utc: datetime,
                          recv_utc: datetime) -> None:
-        self._ltp              = ltp
-        self._ltt_utc          = ltt_utc
-        self._last_market_recv = recv_utc
+        pass
 
     # ── Depth feed (primary driver) ───────────────────────────────────────────
 
     def on_depth_packet(
         self,
-        ts_utc:      datetime,
-        bid_price:   float,
-        bid_qty:     float,
-        ask_price:   float,
-        ask_qty:     float,
+        ts_utc:    datetime,
+        bid_price: float,
+        bid_qty:   float,
+        ask_price: float,
+        ask_qty:   float,
     ) -> None:
         i   = self._packet_idx
         self._packet_idx += 1
@@ -163,16 +151,15 @@ class PaperBroker:
                 (o.side < 0 and ask_price > o.price)
             )
 
-            if fill_candidate and self._layer2_confirms(o.price, o.side):
-                fill_layer = self._fill_layer(o)
-                self._position_side   = o.side
-                self._entry_price     = o.price
-                self._entry_packet    = i
-                self._entry_ts        = ts_utc
-                self._pending_entry   = None
-                self.n_fills         += 1
+            if fill_candidate:
+                self._position_side = o.side
+                self._entry_price   = o.price
+                self._entry_packet  = i
+                self._entry_ts      = ts_utc
+                self._pending_entry = None
+                self.n_fills       += 1
                 log_order_event(self.underlying, "fill_confirmed", o.side,
-                                o.price, self.lot_size * N_LOTS, fill_layer)
+                                o.price, self.lot_size * N_LOTS, "depth_only")
 
             elif (i - o.post_packet) >= ORDER_TIMEOUT_PKTS:
                 self._pending_entry = None
@@ -227,24 +214,6 @@ class PaperBroker:
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
-    def _layer2_confirms(self, posted_price: float, side: int) -> bool:
-        if self._last_market_recv is None or self._ltt_utc is None:
-            return False
-        age = (self._last_market_recv - self._ltt_utc).total_seconds()
-        if age > MARKET_FEED_STALE_SECS:
-            return False
-        if side > 0:
-            return self._ltp <= posted_price
-        else:
-            return self._ltp >= posted_price
-
-    def _fill_layer(self, o: _Order) -> str:
-        if not self._layer2_confirms(o.price, o.side):
-            return "depth_only"
-        if o.qty_consumed < o.queue_ahead:
-            return "queue_doubt"
-        return "depth+market"
-
     def _close_position(self, exit_price: float, method: str,
                         exit_packet: int, exit_ts: datetime, mid: float) -> None:
         qty       = self.lot_size * N_LOTS
@@ -264,7 +233,7 @@ class PaperBroker:
             "exit_price":   round(exit_price, 4),
             "entry_method": "maker",
             "exit_method":  method,
-            "fill_layer":   "",   # set at fill time
+            "fill_layer":   "depth_only",
             "lot_size":     self.lot_size,
             "n_lots":       N_LOTS,
             "notional":     round(self._entry_price * qty, 2),

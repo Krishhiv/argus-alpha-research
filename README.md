@@ -121,11 +121,11 @@ Passive limit order strategy that earns the spread rather than paying it.
 
 **Entry:** On a fresh threshold cross, post a limit order at the current L1 bid (BUY) or ask (SELL). "Fresh cross" requires `prev_abs_sig < threshold` so the strategy does not re-enter on a sustained signal.
 
-**Fill detection — 2-layer gate:**
-- **Layer 1 (depth):** BUY fills when `bid_price_01 < posted_price` (aggressive sellers consumed our level). SELL fills when `ask_price_01 > posted_price`.
-- **Layer 2 (market feed):** LTP must confirm a print at or beyond the posted price, and the market feed packet must be less than 5 seconds stale.
+**Fill detection (depth-only):**
+- BUY fills when `bid_price_01 < posted_price` (aggressive sellers consumed our level). SELL fills when `ask_price_01 > posted_price`.
+- Matches the backtester's fill model exactly. No market feed connection is needed.
 
-**Queue position approximation:** `queue_ahead = bid_qty_01` at post time; `qty_consumed` = cumulative drop in L1 bid qty since post. Fills where `qty_consumed < queue_ahead` are flagged as `queue_doubt` in the trade log.
+**Queue position approximation:** `queue_ahead = bid_qty_01` at post time; `qty_consumed` = cumulative drop in L1 bid qty since post. Logged with every fill for post-hoc analysis.
 
 **Exit (maker):** Post a passive limit at the current ask (long) or bid (short). Exit fires when the book moves through the posted exit price.
 
@@ -188,7 +188,7 @@ A live paper trading environment that connects to Dhan's real-time feeds and sim
 ```
 main.py
   ├── contracts.py       resolve current security_ids from instrument master CSV
-  ├── feed_client.py     two asyncio tasks (depth feed + market feed)
+  ├── feed_client.py     depth feed asyncio task (depth-only; no market feed needed)
   │     └── dhan_parser.py   binary packet parser
   └── broker.py × 4     one PaperBroker per instrument
         └── logger.py    append-only CSV writes (trades, orders, PnL snapshots)
@@ -241,7 +241,6 @@ ssh lightsail-mumbai "cd /home/ubuntu/paper-trader && git pull"
 | Fill rate | ≥ 6% of posted orders |
 | Win rate | ≥ 60% |
 | Net P&L per trade | ≥ ₹15 |
-| Layer-2 confirmation rate | ≥ 70% of fills |
 
 ---
 
@@ -280,7 +279,7 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 | `tests/test_backtester.py` | 28 | Backtesting engine, cost model |
 | `tests/test_features.py` | — | Feature library smoke tests |
 | `tests/test_maker_engine.py` | — | Maker engine |
-| `tests/test_paper_trader.py` | 37 | Signal math, broker state machine, binary parser, contract resolution |
+| `tests/test_paper_trader.py` | 34 | Signal math, broker state machine, binary parser, contract resolution |
 
 Run all tests:
 ```bash
@@ -302,7 +301,7 @@ python -m pytest tests/ -v
 - [x] Paper trader — full environment (broker, logger, report, systemd)
 - [x] Paper trader — Dhan websocket connections (depth + market feed)
 - [x] Paper trader — auto contract resolution from instrument master
-- [x] Paper trader — 37 unit tests (37/37 passing)
+- [x] Paper trader — 34 unit tests (34/34 passing)
 - [ ] Deploy paper trader to VPS
 - [ ] 20-day live paper trading run
 - [ ] Evaluate against success criteria → decision on Phase 2 (live capital)
