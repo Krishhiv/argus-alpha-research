@@ -161,6 +161,8 @@ Run: `python run_oos_validation.py`
 
 **Parameters used:** `entry_threshold=0.20`, `max_hold=500`, `order_timeout=10`, `exit_mode='maker'`, `fresh_cross=True`
 
+> **Live recalibration (2026-05-30):** Entry threshold raised to 0.35, queue fill filter added (qty_consumed ≥ 10% of queue_ahead), and minimum 10-packet hold before exit posting. These correct for live tick data being ~10× noisier than compacted backtester data.
+
 Produces `trade_log_train.csv` and `trade_log_oos.csv` with 18 columns per trade (entry/exit timestamps, prices, methods, lot size, notional, hold duration, gross P&L, fee, net P&L).
 
 > **Caveat:** OOS Sharpe of 11–18 is almost certainly optimistic. Backtest fill model assumes no queue position and no adverse selection. Statistically meaningless with 5 daily observations (SE ≈ ±4–5 Sharpe units). Realistic live Sharpe estimate: 1–5. The paper trading phase exists to measure actual fill rate and net P&L before committing capital.
@@ -279,7 +281,7 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 | `tests/test_backtester.py` | 28 | Backtesting engine, cost model |
 | `tests/test_features.py` | — | Feature library smoke tests |
 | `tests/test_maker_engine.py` | — | Maker engine |
-| `tests/test_paper_trader.py` | 34 | Signal math, broker state machine, binary parser, contract resolution |
+| `tests/test_paper_trader.py` | 36 | Signal math, broker state machine, binary parser, contract resolution |
 
 Run all tests:
 ```bash
@@ -301,7 +303,7 @@ python -m pytest tests/ -v
 - [x] Paper trader — full environment (broker, logger, report, systemd)
 - [x] Paper trader — Dhan websocket connections (depth + market feed)
 - [x] Paper trader — auto contract resolution from instrument master
-- [x] Paper trader — 34 unit tests (34/34 passing)
+- [x] Paper trader — 36 unit tests (36/36 passing)
 - [ ] Deploy paper trader to VPS
 - [ ] 20-day live paper trading run
 - [ ] Evaluate against success criteria → decision on Phase 2 (live capital)

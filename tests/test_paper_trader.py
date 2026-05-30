@@ -24,7 +24,7 @@ from paper_trader.dhan_parser import (
     parse_market_feed_message,
 )
 from paper_trader.contracts import resolve_security_ids
-from paper_trader.config import ENTRY_THRESHOLD, ORDER_TIMEOUT_PKTS, MAX_HOLD_PACKETS
+from paper_trader.config import ENTRY_THRESHOLD, ORDER_TIMEOUT_PKTS, MAX_HOLD_PACKETS, MIN_HOLD_PKTS
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -186,9 +186,10 @@ class TestBrokerExit:
 
     def test_maker_exit_long(self):
         br = self._filled_long()
-        # First STATE-3 packet: pending exit posted at ask=102.0
-        _depth(br, 100.0, 500, 102.0, 500)
-        # Second packet: ask=102.1 > exit_price=102.0 → maker_exit
+        # Exit is posted only after MIN_HOLD_PKTS packets in position
+        for _ in range(MIN_HOLD_PKTS):
+            _depth(br, 100.0, 500, 102.0, 500)  # hold; exit posts at ask=102.0 on packet 10
+        # Trigger: ask=102.1 > exit_price=102.0 → maker_exit
         _depth(br, 100.0, 500, 102.1, 500)
         assert br._position_side == 0
         assert br.trades[0]["exit_method"] == "maker_exit"
@@ -214,7 +215,8 @@ class TestBrokerExit:
 
     def test_gross_pnl_positive_on_winner(self):
         br = self._filled_long()
-        _depth(br, 100.0, 500, 102.0, 500)
+        for _ in range(MIN_HOLD_PKTS):
+            _depth(br, 100.0, 500, 102.0, 500)
         _depth(br, 100.0, 500, 102.1, 500)      # exit at 102.0, entry at 100.0
         t = br.trades[0]
         assert t["entry_price"] == pytest.approx(100.0)
@@ -231,15 +233,27 @@ class TestBrokerExit:
 
 # ── Broker — queue doubt ──────────────────────────────────────────────────────
 
-class TestBrokerQueueDoubt:
-    def test_queue_doubt_when_insufficient_consumption(self):
-        # Post BUY with large queue ahead; bid drops but qty consumed < queue_ahead
+class TestBrokerQueueFill:
+    def test_queue_filter_blocks_insufficient_consumption(self):
+        # qty_consumed=100 < 10% of queue_ahead=10000 → fill rejected
         br = PaperBroker("HDFCBANK")
-        # Post at bid=100.0 with large bid_qty → large queue_ahead
-        _depth(br, 100.0, 10_000, 101.0, 10)    # queue_ahead = 10_000
-        # bid drops (L1 fill candidate) but only 100 qty consumed (bid_qty drops 100)
-        _depth(br, 99.5, 9_900, 101.0, 10)      # qty_consumed = max(0, 10000-9900) = 100
-        # bid=99.5 < posted=100.0 → depth-only fill; qty_consumed=100 < queue_ahead=10000
+        _depth(br, 100.0, 10_000, 101.0, 10)    # post BUY, queue_ahead=10_000
+        _depth(br, 99.5, 9_900, 101.0, 10)      # qty_consumed=100, need ≥1000 → blocked
+        assert br.n_fills == 0
+        assert br._pending_entry is not None     # order still live, not cancelled
+
+    def test_queue_filter_allows_sufficient_consumption(self):
+        # qty_consumed=490 >= 10% of queue_ahead=990 → fill accepted
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY)                        # post BUY at 100.0, queue_ahead=990
+        _depth(br, 99.5, 500, 101.0, 10)         # qty_consumed=490 ≥ 99 → fill
+        assert br.n_fills == 1
+
+    def test_queue_filter_sell_side(self):
+        # For SELL orders, ask_qty drop (not bid_qty) is checked
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_SELL)                       # post SELL at 101.0, queue_ahead=990 (ask_qty)
+        _depth(br, 100.0, 10, 101.5, 500)        # ask_qty drop: 990→500=490 ≥ 99 → fill
         assert br.n_fills == 1
 
 

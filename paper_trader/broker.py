@@ -6,9 +6,15 @@ Fill detection uses Layer 1 only (depth): BUY fills when bid_price_01 drops
 below the posted price; SELL fills when ask_price_01 rises above it.
 This matches the backtester's fill model exactly.
 
-Queue position approximation (logged but not blocking):
-    queue_ahead  = bid_qty_01 at time of post
-    qty_consumed = cumulative drop in bid_qty_01 since post
+Fill quality gate (QUEUE_FILL_MIN_FRAC):
+    A fill is accepted only if qty_consumed >= QUEUE_FILL_MIN_FRAC × queue_ahead.
+    queue_ahead  = L1 qty on the order's side at time of post
+    qty_consumed = cumulative drop in that L1 qty since post
+    Rejects noise bounces where the book moved back without consuming real depth.
+
+Minimum hold (MIN_HOLD_PKTS):
+    Passive exit is not posted until MIN_HOLD_PKTS packets after fill.
+    Prevents immediate exit on the same-tick book bounce.
 
 No orders ever reach Dhan. All PnL is hypothetical.
 """
@@ -22,7 +28,8 @@ from typing import Optional
 
 from paper_trader.config import (
     LOT_SIZES, ENTRY_THRESHOLD, MAX_HOLD_PACKETS,
-    ORDER_TIMEOUT_PKTS, N_LOTS, TICK_SIZE,
+    ORDER_TIMEOUT_PKTS, MIN_HOLD_PKTS, N_LOTS, TICK_SIZE,
+    QUEUE_FILL_MIN_FRAC,
 )
 from paper_trader.logger import log_trade, log_order_event, log_pnl_snapshot
 from paper_trader.signal import compute_micro_deviation
@@ -96,6 +103,7 @@ class PaperBroker:
         self.trades: list[dict] = []
 
         self._prev_bid_qty = float("nan")
+        self._prev_ask_qty = float("nan")
         self._trading_date = ""
         self.last_mid      = 0.0   # most recent (bid+ask)/2; used by shutdown handler
 
@@ -122,11 +130,15 @@ class PaperBroker:
         sig = compute_micro_deviation(bid_price, bid_qty, ask_price, ask_qty)
         self._trading_date = ts_utc.astimezone(IST).strftime("%Y-%m-%d")
 
-        # Track qty consumed at L1 for queue position estimate
+        # Track qty consumed on the order's side (bid for BUY, ask for SELL)
         if not math.isnan(self._prev_bid_qty) and self._pending_entry is not None:
-            drop = max(0.0, self._prev_bid_qty - bid_qty)
+            if self._pending_entry.side > 0:
+                drop = max(0.0, self._prev_bid_qty - bid_qty)
+            else:
+                drop = max(0.0, self._prev_ask_qty - ask_qty)
             self._pending_entry.qty_consumed += drop
         self._prev_bid_qty = bid_qty
+        self._prev_ask_qty = ask_qty
 
         # ── STATE 1: idle ────────────────────────────────────────────────────
         if self._position_side == 0 and self._pending_entry is None:
@@ -151,7 +163,11 @@ class PaperBroker:
                 (o.side < 0 and ask_price > o.price)
             )
 
-            if fill_candidate:
+            queue_ok = (
+                o.queue_ahead <= 0 or
+                o.qty_consumed >= QUEUE_FILL_MIN_FRAC * o.queue_ahead
+            )
+            if fill_candidate and queue_ok:
                 self._position_side = o.side
                 self._entry_price   = o.price
                 self._entry_packet  = i
@@ -171,8 +187,8 @@ class PaperBroker:
         elif self._position_side != 0:
             packets_held = i - self._entry_packet
 
-            # Post passive exit if not yet posted
-            if self._pending_exit is None:
+            # Post passive exit only after minimum hold period
+            if self._pending_exit is None and packets_held >= MIN_HOLD_PKTS:
                 side       = -self._position_side
                 post_price = ask_price if self._position_side > 0 else bid_price
                 self._pending_exit = _Order(
@@ -182,15 +198,18 @@ class PaperBroker:
                     role="exit",
                 )
 
-            # Check exit fill
-            ex = self._pending_exit
-            exit_candidate = (
-                (ex.side < 0 and ask_price > ex.price) or
-                (ex.side > 0 and bid_price < ex.price)
-            )
-            if exit_candidate:
-                self._close_position(ex.price, "maker_exit", i, ts_utc, mid)
-
+            # Check exit fill or taker fallback
+            if self._pending_exit is not None:
+                ex = self._pending_exit
+                exit_candidate = (
+                    (ex.side < 0 and ask_price > ex.price) or
+                    (ex.side > 0 and bid_price < ex.price)
+                )
+                if exit_candidate:
+                    self._close_position(ex.price, "maker_exit", i, ts_utc, mid)
+                elif packets_held >= MAX_HOLD_PACKETS:
+                    taker_price = mid + (-self._position_side) * TICK_SIZE
+                    self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
             elif packets_held >= MAX_HOLD_PACKETS:
                 taker_price = mid + (-self._position_side) * TICK_SIZE
                 self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
@@ -211,6 +230,7 @@ class PaperBroker:
         self._prev_abs_sig     = 0.0
         self._last_exit_packet = -(ORDER_TIMEOUT_PKTS + 1)
         self._prev_bid_qty     = float("nan")
+        self._prev_ask_qty     = float("nan")
 
     # ── Internals ─────────────────────────────────────────────────────────────
 
