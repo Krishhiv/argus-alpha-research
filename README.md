@@ -6,13 +6,13 @@ Depth-feed-only alpha research and paper trading system for NSE equity futures. 
 
 ## Universe
 
-| Instrument | Lot Size | Notes |
-|---|---|---|
-| HDFCBANK | 550 | Primary development instrument |
-| ICICIBANK | 700 | |
-| RELIANCE | 500 | |
-| TCS | 175 | Weaker A6 signal — size down |
-| BAJFINANCE | — | **Excluded** — data quality too poor |
+| Instrument | Lot Size | Live | Notes |
+|---|---|---|---|
+| ICICIBANK | 700 | ✅ | Strongest live alpha (62–64% win rate) |
+| RELIANCE | 500 | ✅ | Strong live alpha |
+| HDFCBANK | 550 | ✅ | Roughly break-even, high win rate — kept for diversification |
+| TCS | 175 | ⏸️ | **Suspended** — ~49% win rate, highest break-even (₹0.72/share), weakest signal |
+| BAJFINANCE | — | ❌ | **Excluded** — data quality too poor |
 
 ---
 
@@ -119,19 +119,28 @@ A large positive deviation indicates bid-side pressure (bullish); large negative
 
 Passive limit order strategy that earns the spread rather than paying it.
 
-**Entry:** On a fresh threshold cross, post a limit order at the current L1 bid (BUY) or ask (SELL). "Fresh cross" requires `prev_abs_sig < threshold` so the strategy does not re-enter on a sustained signal.
+**Entry — two gates:**
+1. **Signal:** a fresh microprice-deviation cross above the floor `ENTRY_THRESHOLD = 0.15`. "Fresh cross" requires `prev_abs_sig < threshold` so the strategy does not re-enter on a sustained signal.
+2. **Economic edge gate (primary filter):** post only when the half-spread the maker would capture covers its per-share round-trip fee with margin:
+
+   ```
+   spread / 2  ≥  EDGE_MARGIN × (round_trip_fee / qty)
+   ```
+
+   The round-trip fee is computed live from the current mid via the same fee model used for P&L, so the gate is **per-instrument, price-aware, and self-calibrating**. A flat rupee threshold is meaningless across instruments whose price, spread, and per-share fees differ 3×. `EDGE_MARGIN = 1.0` (half-spread must at least cover fees). On entry the order is posted at the current L1 bid (BUY) or ask (SELL).
 
 **Fill detection (depth-only):**
 - BUY fills when `bid_price_01 < posted_price` (aggressive sellers consumed our level). SELL fills when `ask_price_01 > posted_price`.
-- Matches the backtester's fill model exactly. No market feed connection is needed.
+- A fill is accepted only if `qty_consumed ≥ QUEUE_FILL_MIN_FRAC × queue_ahead` (0.10) — guards against noise bounces that never consumed real queue depth.
+- Matches the backtester's fill model. No market feed connection is needed.
 
-**Queue position approximation:** `queue_ahead = bid_qty_01` at post time; `qty_consumed` = cumulative drop in L1 bid qty since post. Logged with every fill for post-hoc analysis.
+**Exit (maker):** After a minimum hold of `MIN_HOLD_PKTS = 10` packets (~4 s, prevents same-tick exits), post a passive limit at the current ask (long) or bid (short). Exit fires when the book moves through the posted exit price.
 
-**Exit (maker):** Post a passive limit at the current ask (long) or bid (short). Exit fires when the book moves through the posted exit price.
-
-**Exit (taker fallback):** If the position is held for `MAX_HOLD_PACKETS = 500` packets (~200 seconds) without a passive exit, exit at mid ± 1 tick.
+**Exit (taker fallback):** If the position is held for `MAX_HOLD_PACKETS = 150` packets (~60 s) without a passive exit, exit at mid ± 1 tick. (Reduced from 500 — the signal horizon is ~1 packet, so a position that hasn't exited in 60 s has lost its edge.)
 
 **Cooldown:** `ORDER_TIMEOUT_PKTS = 10` packets between a cancel/exit and the next entry.
+
+**Robustness:** Zero-price / crossed-book packets (Dhan emits these at the 15:30 IST close) are dropped before any state update, so they cannot trigger spurious fills or corrupt the mid used by the EOD force-close. New entries also stop after `NO_NEW_ENTRY_IST = 15:25`.
 
 ---
 
@@ -146,7 +155,16 @@ Passive limit order strategy that earns the spread rather than paying it.
 | Stamp duty | 0.002% — buy side only |
 | GST | 18% on brokerage + exchange + SEBI |
 
-On 1 lot HDFCBANK (~₹9L notional), total round-trip cost ≈ ₹208. STT is applied to the sell-side notional, so fees are slightly asymmetric between long and short trades (~₹0.28 difference at current prices).
+STT is applied to the sell-side notional, so fees are slightly asymmetric between long and short trades. The economically important quantity is the **per-share break-even move** (round-trip fee ÷ qty) — what the price must move for a trade to clear costs. It varies ~3× across the universe and is what the entry edge gate keys off:
+
+| Instrument | 1-lot round-trip fee | Break-even move/share |
+|---|---|---|
+| ICICIBANK | ~₹222 | ₹0.32 |
+| HDFCBANK | ~₹126 | ₹0.23 |
+| RELIANCE | ~₹177 | ₹0.35 |
+| TCS (suspended) | ~₹127 | **₹0.72** |
+
+TCS's high break-even (driven by its ~₹2,460 price → STT-heavy) is why its ~50% win-rate signal cannot overcome costs.
 
 ---
 
@@ -161,7 +179,9 @@ Run: `python run_oos_validation.py`
 
 **Parameters used:** `entry_threshold=0.20`, `max_hold=500`, `order_timeout=10`, `exit_mode='maker'`, `fresh_cross=True`
 
-> **Live recalibration (2026-05-30):** Entry threshold raised to 0.35, queue fill filter added (qty_consumed ≥ 10% of queue_ahead), and minimum 10-packet hold before exit posting. These correct for live tick data being ~10× noisier than compacted backtester data.
+> **Live recalibration (2026-05-30):** Queue fill filter added (qty_consumed ≥ 10% of queue_ahead) and minimum 10-packet hold before exit posting, to correct for live tick data being noisier than compacted backtester data.
+>
+> **Economic edge gate + EOD fix (2026-06-02):** Replaced the flat rupee threshold with a per-instrument economic edge gate (`spread/2 ≥ fee/share`), suspended TCS, reduced `max_hold` to 150, and fixed a critical bug where Dhan's zero-price close-of-session packets corrupted the EOD mid and produced ±₹400k phantom P&L. **Validation:** replaying real June 1–2 depth through the old vs new logic on identical data moved the 2-day net from **−₹12,594 → +₹14,834 (ex-TCS)** and eliminated the phantom trades. Caveat: compacted-data fills are optimistic; live results will be lower.
 
 Produces `trade_log_train.csv` and `trade_log_oos.csv` with 18 columns per trade (entry/exit timestamps, prices, methods, lot size, notional, hold duration, gross P&L, fee, net P&L).
 
@@ -192,7 +212,7 @@ main.py
   ├── contracts.py       resolve current security_ids from instrument master CSV
   ├── feed_client.py     depth feed asyncio task (depth-only; no market feed needed)
   │     └── dhan_parser.py   binary packet parser
-  └── broker.py × 4     one PaperBroker per instrument
+  └── broker.py × N     one PaperBroker per live instrument (3: HDFCBANK, ICICIBANK, RELIANCE)
         └── logger.py    append-only CSV writes (trades, orders, PnL snapshots)
 ```
 
@@ -281,7 +301,7 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 | `tests/test_backtester.py` | 28 | Backtesting engine, cost model |
 | `tests/test_features.py` | — | Feature library smoke tests |
 | `tests/test_maker_engine.py` | — | Maker engine |
-| `tests/test_paper_trader.py` | 36 | Signal math, broker state machine, binary parser, contract resolution |
+| `tests/test_paper_trader.py` | 46 | Signal math, broker state machine, economic gate, garbage-packet guard, session cutoff, binary parser, contract resolution |
 
 Run all tests:
 ```bash
@@ -303,7 +323,7 @@ python -m pytest tests/ -v
 - [x] Paper trader — full environment (broker, logger, report, systemd)
 - [x] Paper trader — Dhan websocket connections (depth + market feed)
 - [x] Paper trader — auto contract resolution from instrument master
-- [x] Paper trader — 36 unit tests (36/36 passing)
+- [x] Paper trader — 46 unit tests (46/46 passing)
 - [ ] Deploy paper trader to VPS
 - [ ] 20-day live paper trading run
 - [ ] Evaluate against success criteria → decision on Phase 2 (live capital)

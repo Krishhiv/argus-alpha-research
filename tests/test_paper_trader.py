@@ -31,15 +31,22 @@ from paper_trader.config import ENTRY_THRESHOLD, ORDER_TIMEOUT_PKTS, MAX_HOLD_PA
 
 UTC = timezone.utc
 
+# Fixed in-session timestamp (09:30 IST) so the NO_NEW_ENTRY_IST cutoff does not
+# interfere with the bulk of the tests regardless of wall-clock time at run.
+SESSION_TS = datetime(2026, 6, 1, 4, 0, 0, tzinfo=UTC)
 
-def _depth(broker: PaperBroker, bid_p: float, bid_q: int, ask_p: float, ask_q: int) -> None:
+
+def _depth(broker: PaperBroker, bid_p: float, bid_q: int, ask_p: float, ask_q: int,
+           ts: datetime = SESSION_TS) -> None:
     broker.on_depth_packet(
-        ts_utc=datetime.now(UTC), bid_price=bid_p, bid_qty=bid_q,
+        ts_utc=ts, bid_price=bid_p, bid_qty=bid_q,
         ask_price=ask_p, ask_qty=ask_q,
     )
 
 
 # Signal helpers ---------------------------------------------------------------
+# Books use a 1.0 spread (half-spread 0.5) so the economic edge gate passes for
+# the cheap test instrument (HDFCBANK break-even ≈ 0.11/share at price 100).
 # BUY signal: large bid_qty pulls microprice toward ask → deviation > 0
 # bid=100 q=990, ask=101 q=10: micro=(100*10+101*990)/1000=100.99, mid=100.5, dev=+0.49
 _BUY  = (100.0, 990, 101.0, 10)
@@ -255,6 +262,102 @@ class TestBrokerQueueFill:
         _depth(br, *_SELL)                       # post SELL at 101.0, queue_ahead=990 (ask_qty)
         _depth(br, 100.0, 10, 101.5, 500)        # ask_qty drop: 990→500=490 ≥ 99 → fill
         assert br.n_fills == 1
+
+
+# ── Broker — economic edge gate ───────────────────────────────────────────────
+
+class TestBrokerEconomicGate:
+    def test_blocks_when_half_spread_below_breakeven(self):
+        # TCS break-even ≈ ₹0.72/share. A 1.0 spread (half 0.5) does not cover it,
+        # even though the microprice signal itself is strong.
+        br = PaperBroker("TCS")
+        assert abs(compute_micro_deviation(2460.0, 990, 2461.0, 10)) >= ENTRY_THRESHOLD
+        _depth(br, 2460.0, 990, 2461.0, 10)      # half_spread 0.5 < 0.72 → blocked
+        assert br.n_posts == 0
+
+    def test_allows_when_half_spread_covers_fees(self):
+        # A 2.0 spread (half 1.0) on TCS clears the ~0.72 break-even.
+        br = PaperBroker("TCS")
+        _depth(br, 2460.0, 990, 2462.0, 10)      # half_spread 1.0 ≥ 0.72 → post
+        assert br.n_posts == 1
+        assert br._pending_entry.side == 1
+
+    def test_cheap_instrument_trades_at_tight_spread(self):
+        # HDFCBANK break-even ≈ ₹0.23/share, so the same 1.0 spread that blocks
+        # TCS lets HDFCBANK quote. This is the cross-instrument self-calibration.
+        br = PaperBroker("HDFCBANK")
+        _depth(br, 743.0, 990, 744.0, 10)        # half_spread 0.5 ≥ 0.23 → post
+        assert br.n_posts == 1
+
+
+# ── Broker — garbage / session-end packet guard ──────────────────────────────
+
+class TestBrokerGarbagePackets:
+    def test_zero_price_packet_no_post(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, 0.0, 990, 0.0, 10)            # Dhan session-end zero packet
+        assert br.n_posts == 0
+        assert br.last_mid == 0.0                # mid never corrupted
+
+    def test_zero_price_packet_does_not_fill_or_corrupt_mid(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY)                        # post BUY at 100.0; last_mid = 100.5
+        _depth(br, 0.0, 0, 0.0, 0)               # garbage — must be dropped
+        assert br.n_fills == 0                   # no spurious fill (bid 0 < 100)
+        assert br._pending_entry is not None
+        assert br.last_mid == pytest.approx(100.5)   # mid unchanged by garbage
+
+    def test_crossed_book_dropped(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, 101.0, 990, 100.0, 10)        # ask < bid → dropped
+        assert br.n_posts == 0
+        assert br.last_mid == 0.0
+
+
+# ── Broker — session entry cutoff ─────────────────────────────────────────────
+
+class TestBrokerSessionCutoff:
+    _LATE  = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)   # 15:30 IST (past cutoff)
+    _EARLY = datetime(2026, 6, 1,  9, 50, 0, tzinfo=UTC)  # 15:20 IST (before cutoff)
+
+    def test_no_entry_after_cutoff(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY, ts=self._LATE)
+        assert br.n_posts == 0
+
+    def test_entry_allowed_before_cutoff(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY, ts=self._EARLY)
+        assert br.n_posts == 1
+
+
+# ── Broker — robust end-of-day force close ────────────────────────────────────
+
+class TestBrokerRobustEOD:
+    def _filled_long(self) -> PaperBroker:
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY)                        # post BUY at 100.0
+        _depth(br, 99.5, 500, 101.0, 10)         # fill; last_mid = 100.25
+        assert br.n_fills == 1
+        return br
+
+    def test_zero_mid_falls_back_to_last_valid_mid(self):
+        br = self._filled_long()
+        br.eod_force_close(ts_utc=datetime.now(UTC), mid=0.0)
+        assert br._position_side == 0
+        t = br.trades[0]
+        assert t["exit_method"] == "taker_eod"
+        # Falls back to last valid mid 100.25, NOT a garbage 0 ± tick
+        assert t["exit_price"] == pytest.approx(100.20)
+        assert abs(t["net_pnl"]) < 1_000          # sane, not a ₹400k artifact
+
+    def test_falls_back_to_entry_price_when_no_valid_mid(self):
+        br = self._filled_long()
+        br.last_mid = 0.0                         # simulate never having a valid mid
+        br.eod_force_close(ts_utc=datetime.now(UTC), mid=0.0)
+        t = br.trades[0]
+        assert t["exit_price"] == pytest.approx(99.95)   # entry 100.0 − tick
+        assert abs(t["net_pnl"]) < 1_000
 
 
 # ── Dhan binary parser ────────────────────────────────────────────────────────

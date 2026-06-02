@@ -6,6 +6,13 @@ Fill detection uses Layer 1 only (depth): BUY fills when bid_price_01 drops
 below the posted price; SELL fills when ask_price_01 rises above it.
 This matches the backtester's fill model exactly.
 
+Economic edge gate (EDGE_MARGIN):
+    Entry fires only when the half-spread the maker can capture covers its
+    per-share round-trip fee with margin: spread/2 >= EDGE_MARGIN × fee/qty.
+    This is per-instrument and price-aware; it replaces the old flat rupee
+    threshold (which let TCS over-trade at a ~50% win rate while the cheap,
+    high-win-rate banks barely traded).
+
 Fill quality gate (QUEUE_FILL_MIN_FRAC):
     A fill is accepted only if qty_consumed >= QUEUE_FILL_MIN_FRAC × queue_ahead.
     queue_ahead  = L1 qty on the order's side at time of post
@@ -15,6 +22,12 @@ Fill quality gate (QUEUE_FILL_MIN_FRAC):
 Minimum hold (MIN_HOLD_PKTS):
     Passive exit is not posted until MIN_HOLD_PKTS packets after fill.
     Prevents immediate exit on the same-tick book bounce.
+
+Robustness:
+    Zero-price / crossed packets (Dhan emits these at session close) are dropped
+    before any state update, so they cannot trigger spurious fills or corrupt the
+    mid used by the end-of-day force-close. New entries also stop after
+    NO_NEW_ENTRY_IST.
 
 No orders ever reach Dhan. All PnL is hypothetical.
 """
@@ -29,7 +42,7 @@ from typing import Optional
 from paper_trader.config import (
     LOT_SIZES, ENTRY_THRESHOLD, MAX_HOLD_PACKETS,
     ORDER_TIMEOUT_PKTS, MIN_HOLD_PKTS, N_LOTS, TICK_SIZE,
-    QUEUE_FILL_MIN_FRAC,
+    QUEUE_FILL_MIN_FRAC, EDGE_MARGIN, NO_NEW_ENTRY_IST,
 )
 from paper_trader.logger import log_trade, log_order_event, log_pnl_snapshot
 from paper_trader.signal import compute_micro_deviation
@@ -82,6 +95,8 @@ class PaperBroker:
     def __init__(self, underlying: str) -> None:
         self.underlying  = underlying
         self.lot_size    = LOT_SIZES[underlying]
+        h, m             = NO_NEW_ENTRY_IST.split(":")
+        self._no_entry_after = (int(h), int(m))   # (hour, minute) IST cutoff
 
         # State
         self._packet_idx       = 0
@@ -123,10 +138,17 @@ class PaperBroker:
         ask_price: float,
         ask_qty:   float,
     ) -> None:
+        # Drop garbage / session-end packets before touching any state. Dhan
+        # emits zero-price packets around 15:30 IST; these would otherwise
+        # trigger spurious fills (bid 0 < posted price) and zero out the mid
+        # used by the EOD force-close, producing absurd PnL.
+        if bid_price <= 0.0 or ask_price <= 0.0 or ask_price < bid_price:
+            return
+
         i   = self._packet_idx
         self._packet_idx += 1
         mid = (bid_price + ask_price) / 2.0
-        self.last_mid = mid
+        self.last_mid = mid   # only ever a valid mid (garbage dropped above)
         sig = compute_micro_deviation(bid_price, bid_qty, ask_price, ask_qty)
         self._trading_date = ts_utc.astimezone(IST).strftime("%Y-%m-%d")
 
@@ -142,9 +164,21 @@ class PaperBroker:
 
         # ── STATE 1: idle ────────────────────────────────────────────────────
         if self._position_side == 0 and self._pending_entry is None:
-            cross_ok    = self._prev_abs_sig < ENTRY_THRESHOLD
-            cooldown_ok = (i - self._last_exit_packet) > ORDER_TIMEOUT_PKTS
-            if cross_ok and cooldown_ok and abs(sig) >= ENTRY_THRESHOLD:
+            # Economic edge gate: only quote when the half-spread we'd capture
+            # covers our per-share round-trip fee with margin. Self-calibrating
+            # per instrument from the live mid.
+            qty          = self.lot_size * N_LOTS
+            breakeven_sh = _compute_fee(mid, mid, self.lot_size, N_LOTS, 1) / qty
+            half_spread  = (ask_price - bid_price) / 2.0
+
+            ist          = ts_utc.astimezone(IST)
+            cross_ok     = self._prev_abs_sig < ENTRY_THRESHOLD
+            cooldown_ok  = (i - self._last_exit_packet) > ORDER_TIMEOUT_PKTS
+            signal_ok    = abs(sig) >= ENTRY_THRESHOLD
+            edge_ok      = half_spread >= EDGE_MARGIN * breakeven_sh
+            time_ok      = (ist.hour, ist.minute) < self._no_entry_after
+
+            if cross_ok and cooldown_ok and signal_ok and edge_ok and time_ok:
                 side       = 1 if sig > 0 else -1
                 post_price = bid_price if side > 0 else ask_price
                 self._pending_entry = _Order(
@@ -218,9 +252,14 @@ class PaperBroker:
 
     def eod_force_close(self, ts_utc: datetime, mid: float) -> None:
         if self._position_side != 0:
-            taker_price = mid + (-self._position_side) * TICK_SIZE
+            # Defend against a zero/garbage mid: fall back to the last valid mid,
+            # then to the entry price (≈ flat PnL) rather than emitting nonsense.
+            close_mid = mid if (mid and mid > 0.0) else self.last_mid
+            if not close_mid or close_mid <= 0.0:
+                close_mid = self._entry_price
+            taker_price = close_mid + (-self._position_side) * TICK_SIZE
             self._close_position(taker_price, "taker_eod",
-                                 self._packet_idx, ts_utc, mid)
+                                 self._packet_idx, ts_utc, close_mid)
 
     def reset_session(self) -> None:
         self._packet_idx       = 0
