@@ -104,4 +104,4 @@ PNL_LOG         = f"{LOGS_DIR}/paper_pnl.csv"
 # The running trader writes a live state snapshot here every interval; the
 # monitor server reads it (plus the CSV logs) to render the dashboard.
 TELEMETRY_PATH         = f"{LOGS_DIR}/paper_telemetry.json"
-TELEMETRY_INTERVAL_SEC = 2.0
+TELEMETRY_INTERVAL_SEC = 1.0   # 1 Hz live snapshot — matches the dashboard poll rate
