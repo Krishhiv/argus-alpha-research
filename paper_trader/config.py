@@ -28,11 +28,33 @@ INSTRUMENTS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
 # threshold is meaningless across instruments whose price, spread, and per-share
 # fees differ 3×. See EDGE_MARGIN.
 ENTRY_THRESHOLD      = 0.15   # minimum |micro_deviation| (rupees) — signal floor only
-MAX_HOLD_PACKETS     = 150    # taker fallback after this many packets (~60s)
+MAX_HOLD_PACKETS     = 250    # taker fallback after this many packets (~100s)
 ORDER_TIMEOUT_PKTS   = 10     # cancel unfilled entry after this many packets (~4s)
 MIN_HOLD_PKTS        = 10     # packets in position before posting passive exit (~4s)
 N_LOTS               = 1      # contracts per order
 TICK_SIZE            = 0.05   # NSE equity futures minimum price increment
+
+# Hard price stop: if an open position runs this many ticks adverse (mid vs
+# entry), exit at market immediately rather than waiting for MAX_HOLD_PACKETS.
+# Caps the left tail of taker losses. 0 = disabled (pure time-based exit).
+# 12 ticks (~₹0.60) is a deliberately WIDE disaster-stop: it leaves slow,
+# recoverable wobbles alone (tight stops backfire — they cut winners) and only
+# fires on genuine adverse runs, capping a single trade to ~−0.23% of ₹5L.
+STOP_LOSS_TICKS      = 12
+
+# Daily loss circuit breaker (aggregate across all instruments in a session).
+# Once the day's net PnL breaches this, NEW entries stop for the rest of the
+# day; open positions still close normally.
+#
+# This is a CATASTROPHE / bug backstop, NOT a daily risk control. Replaying
+# June 1-3 showed the strategy mean-reverts intraday — every day recovered from
+# a sizeable drawdown (min −₹5.6k → +₹6.1k; −₹3.1k → +₹9.9k; −₹7.8k → −₹0.2k).
+# A tight breaker (e.g. −₹7.5k) would have locked in the June 3 trough and
+# killed the recovery, turning a flat day into the worst of the three. So the
+# limit sits ~2.5× below the worst observed recoverable dip: it will not fire on
+# normal mean-reversion, only on a runaway (feed corruption, undetected bug, or
+# a genuinely catastrophic cascade). −₹20,000 ≈ −4% of the ₹5L simulated capital.
+DAILY_LOSS_LIMIT     = -20000.0
 
 # ── Economic edge gate (primary entry filter) ─────────────────────────────────
 

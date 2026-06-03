@@ -18,8 +18,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from paper_trader.broker import PaperBroker
-from paper_trader.config import INSTRUMENTS
+from paper_trader.broker import PaperBroker, DayRisk
+from paper_trader.config import INSTRUMENTS, DAILY_LOSS_LIMIT
 from paper_trader.contracts import resolve_security_ids
 from paper_trader.feed_client import run_depth_feed
 
@@ -52,7 +52,10 @@ async def async_main() -> None:
     security_ids = resolve_security_ids(INSTRUMENTS)
     log.info("Security IDs: %s", security_ids)
 
-    brokers: dict[str, PaperBroker] = {inst: PaperBroker(inst) for inst in INSTRUMENTS}
+    risk = DayRisk(DAILY_LOSS_LIMIT)
+    brokers: dict[str, PaperBroker] = {
+        inst: PaperBroker(inst, risk=risk) for inst in INSTRUMENTS
+    }
     stop_event = asyncio.Event()
 
     def _shutdown(sig, frame) -> None:

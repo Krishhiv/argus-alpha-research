@@ -93,7 +93,7 @@ tests/
   test_backtester.py          # 28 tests for backtesting engine
   test_features.py            # smoke tests for feature library
   test_maker_engine.py        # tests for maker strategy engine
-  test_paper_trader.py        # 37 tests for paper trader modules
+  test_paper_trader.py        # 54 tests for paper trader modules
 run_oos_validation.py         # out-of-sample validation runner
 ```
 
@@ -110,7 +110,7 @@ micro_deviation  = microprice − mid
 
 A large positive deviation indicates bid-side pressure (bullish); large negative indicates ask-side pressure (bearish). ICIR of **6.9** at h=1 packet in in-sample analysis.
 
-**Entry threshold:** `|micro_deviation| ≥ 0.20`  
+**Entry:** gated by the economic edge gate (see Maker Strategy), with `|micro_deviation| ≥ 0.15` as a signal floor.  
 **Signal column:** `micro_deviation` (computed in `paper_trader/signal.py` and `research/features/depth_features.py`)
 
 ---
@@ -136,9 +136,13 @@ Passive limit order strategy that earns the spread rather than paying it.
 
 **Exit (maker):** After a minimum hold of `MIN_HOLD_PKTS = 10` packets (~4 s, prevents same-tick exits), post a passive limit at the current ask (long) or bid (short). Exit fires when the book moves through the posted exit price.
 
-**Exit (taker fallback):** If the position is held for `MAX_HOLD_PACKETS = 150` packets (~60 s) without a passive exit, exit at mid ± 1 tick. (Reduced from 500 — the signal horizon is ~1 packet, so a position that hasn't exited in 60 s has lost its edge.)
+**Exit (taker fallback):** If the position is held for `MAX_HOLD_PACKETS = 250` packets (~100 s) without a passive exit, exit at mid ± 1 tick. Replay across June 1–3 showed a maker needs time to fill its favourable exit — cutting early just dumps trades into the loss bucket. 100 s captures nearly all of that gain with less tail exposure than 160 s.
+
+**Exit (hard stop):** If the position runs `STOP_LOSS_TICKS = 12` ticks (~₹0.60) adverse, exit at market immediately. A deliberately *wide* disaster-stop: tight stops backfire (they cut recoverable wobbles), so this only fires on genuine adverse runs, capping a single trade to ~−0.23% of ₹5L.
 
 **Cooldown:** `ORDER_TIMEOUT_PKTS = 10` packets between a cancel/exit and the next entry.
+
+**Daily circuit breaker:** A session-wide `DayRisk` governor halts *new* entries once aggregate day P&L breaches `DAILY_LOSS_LIMIT = −₹20,000` (open positions still close). This is a catastrophe/bug backstop, **not** a daily risk control — the strategy mean-reverts intraday (every June 1–3 day recovered from a −₹3k to −₹8k trough), so a tight breaker would lock in recoverable drawdowns. The limit sits ~2.5× below the worst observed recoverable dip.
 
 **Robustness:** Zero-price / crossed-book packets (Dhan emits these at the 15:30 IST close) are dropped before any state update, so they cannot trigger spurious fills or corrupt the mid used by the EOD force-close. New entries also stop after `NO_NEW_ENTRY_IST = 15:25`.
 
@@ -301,7 +305,7 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 | `tests/test_backtester.py` | 28 | Backtesting engine, cost model |
 | `tests/test_features.py` | — | Feature library smoke tests |
 | `tests/test_maker_engine.py` | — | Maker engine |
-| `tests/test_paper_trader.py` | 46 | Signal math, broker state machine, economic gate, garbage-packet guard, session cutoff, binary parser, contract resolution |
+| `tests/test_paper_trader.py` | 54 | Signal math, broker state machine, economic gate, garbage-packet guard, session cutoff, binary parser, contract resolution |
 
 Run all tests:
 ```bash
@@ -323,7 +327,7 @@ python -m pytest tests/ -v
 - [x] Paper trader — full environment (broker, logger, report, systemd)
 - [x] Paper trader — Dhan websocket connections (depth + market feed)
 - [x] Paper trader — auto contract resolution from instrument master
-- [x] Paper trader — 46 unit tests (46/46 passing)
+- [x] Paper trader — 54 unit tests (54/54 passing)
 - [ ] Deploy paper trader to VPS
 - [ ] 20-day live paper trading run
 - [ ] Evaluate against success criteria → decision on Phase 2 (live capital)

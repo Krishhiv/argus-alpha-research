@@ -34,6 +34,7 @@ No orders ever reach Dhan. All PnL is hypothetical.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -43,11 +44,38 @@ from paper_trader.config import (
     LOT_SIZES, ENTRY_THRESHOLD, MAX_HOLD_PACKETS,
     ORDER_TIMEOUT_PKTS, MIN_HOLD_PKTS, N_LOTS, TICK_SIZE,
     QUEUE_FILL_MIN_FRAC, EDGE_MARGIN, NO_NEW_ENTRY_IST,
+    STOP_LOSS_TICKS,
 )
 from paper_trader.logger import log_trade, log_order_event, log_pnl_snapshot
 from paper_trader.signal import compute_micro_deviation
 
+log = logging.getLogger("argus.broker")
+
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+class DayRisk:
+    """
+    Session-wide risk governor shared across all PaperBrokers in a process.
+
+    Tracks aggregate day net PnL. Once it breaches loss_limit (a negative
+    number), `halted` flips True and stays True — new entries are blocked for
+    the rest of the session, but open positions still close normally. Because
+    one process runs exactly one trading session (systemd start→stop), the
+    object is naturally fresh each day; no explicit reset needed.
+    """
+
+    def __init__(self, loss_limit: float) -> None:
+        self.loss_limit  = loss_limit
+        self.day_net_pnl = 0.0
+        self.halted      = False
+
+    def record(self, net: float) -> None:
+        self.day_net_pnl += net
+        if not self.halted and self.day_net_pnl <= self.loss_limit:
+            self.halted = True
+            log.warning("DAILY LOSS LIMIT hit (%.0f ≤ %.0f) — halting new entries",
+                        self.day_net_pnl, self.loss_limit)
 
 # NSE futures fee schedule (Dhan)
 _BROKERAGE_PER_ORDER  = 20.0
@@ -92,9 +120,10 @@ class PaperBroker:
     on_market_packet() is a no-op — fill detection uses depth only.
     """
 
-    def __init__(self, underlying: str) -> None:
+    def __init__(self, underlying: str, risk: Optional[DayRisk] = None) -> None:
         self.underlying  = underlying
         self.lot_size    = LOT_SIZES[underlying]
+        self._risk       = risk                   # shared session risk governor
         h, m             = NO_NEW_ENTRY_IST.split(":")
         self._no_entry_after = (int(h), int(m))   # (hour, minute) IST cutoff
 
@@ -177,8 +206,9 @@ class PaperBroker:
             signal_ok    = abs(sig) >= ENTRY_THRESHOLD
             edge_ok      = half_spread >= EDGE_MARGIN * breakeven_sh
             time_ok      = (ist.hour, ist.minute) < self._no_entry_after
+            breaker_ok   = self._risk is None or not self._risk.halted
 
-            if cross_ok and cooldown_ok and signal_ok and edge_ok and time_ok:
+            if cross_ok and cooldown_ok and signal_ok and edge_ok and time_ok and breaker_ok:
                 side       = 1 if sig > 0 else -1
                 post_price = bid_price if side > 0 else ask_price
                 self._pending_entry = _Order(
@@ -219,34 +249,42 @@ class PaperBroker:
 
         # ── STATE 3 & 4: in position ─────────────────────────────────────────
         elif self._position_side != 0:
-            packets_held = i - self._entry_packet
+            packets_held  = i - self._entry_packet
+            adverse_ticks = self._position_side * (self._entry_price - mid) / TICK_SIZE
 
-            # Post passive exit only after minimum hold period
-            if self._pending_exit is None and packets_held >= MIN_HOLD_PKTS:
-                side       = -self._position_side
-                post_price = ask_price if self._position_side > 0 else bid_price
-                self._pending_exit = _Order(
-                    side=side, price=post_price,
-                    post_packet=i, post_ts=ts_utc,
-                    queue_ahead=ask_qty if side < 0 else bid_qty,
-                    role="exit",
-                )
+            # Hard price stop: bail at market if the position has run adverse
+            # beyond STOP_LOSS_TICKS, rather than waiting for the time-based exit.
+            if STOP_LOSS_TICKS > 0 and adverse_ticks >= STOP_LOSS_TICKS:
+                taker_price = mid + (-self._position_side) * TICK_SIZE
+                self._close_position(taker_price, "taker_stop", i, ts_utc, mid)
 
-            # Check exit fill or taker fallback
-            if self._pending_exit is not None:
-                ex = self._pending_exit
-                exit_candidate = (
-                    (ex.side < 0 and ask_price > ex.price) or
-                    (ex.side > 0 and bid_price < ex.price)
-                )
-                if exit_candidate:
-                    self._close_position(ex.price, "maker_exit", i, ts_utc, mid)
+            else:
+                # Post passive exit only after minimum hold period
+                if self._pending_exit is None and packets_held >= MIN_HOLD_PKTS:
+                    side       = -self._position_side
+                    post_price = ask_price if self._position_side > 0 else bid_price
+                    self._pending_exit = _Order(
+                        side=side, price=post_price,
+                        post_packet=i, post_ts=ts_utc,
+                        queue_ahead=ask_qty if side < 0 else bid_qty,
+                        role="exit",
+                    )
+
+                # Check exit fill or taker fallback
+                if self._pending_exit is not None:
+                    ex = self._pending_exit
+                    exit_candidate = (
+                        (ex.side < 0 and ask_price > ex.price) or
+                        (ex.side > 0 and bid_price < ex.price)
+                    )
+                    if exit_candidate:
+                        self._close_position(ex.price, "maker_exit", i, ts_utc, mid)
+                    elif packets_held >= MAX_HOLD_PACKETS:
+                        taker_price = mid + (-self._position_side) * TICK_SIZE
+                        self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
                 elif packets_held >= MAX_HOLD_PACKETS:
                     taker_price = mid + (-self._position_side) * TICK_SIZE
                     self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
-            elif packets_held >= MAX_HOLD_PACKETS:
-                taker_price = mid + (-self._position_side) * TICK_SIZE
-                self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
 
         self._prev_abs_sig = abs(sig)
 
@@ -306,6 +344,8 @@ class PaperBroker:
         }
         self.trades.append(trade)
         self.cum_net_pnl    += net
+        if self._risk is not None:
+            self._risk.record(net)
         self._position_side  = 0
         self._pending_exit   = None
         self._last_exit_packet = exit_packet

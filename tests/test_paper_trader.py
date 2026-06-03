@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from paper_trader.signal import compute_micro_deviation
-from paper_trader.broker import PaperBroker, _compute_fee
+from paper_trader.broker import PaperBroker, DayRisk, _compute_fee
 from paper_trader.dhan_parser import (
     DepthSidePacket,
     TickerPacket,
@@ -24,7 +24,9 @@ from paper_trader.dhan_parser import (
     parse_market_feed_message,
 )
 from paper_trader.contracts import resolve_security_ids
-from paper_trader.config import ENTRY_THRESHOLD, ORDER_TIMEOUT_PKTS, MAX_HOLD_PACKETS, MIN_HOLD_PKTS
+from paper_trader.config import (
+    ENTRY_THRESHOLD, ORDER_TIMEOUT_PKTS, MAX_HOLD_PACKETS, MIN_HOLD_PKTS, STOP_LOSS_TICKS,
+)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -358,6 +360,75 @@ class TestBrokerRobustEOD:
         t = br.trades[0]
         assert t["exit_price"] == pytest.approx(99.95)   # entry 100.0 − tick
         assert abs(t["net_pnl"]) < 1_000
+
+
+# ── Broker — hard price stop ──────────────────────────────────────────────────
+
+class TestBrokerStopLoss:
+    def _filled_long(self) -> PaperBroker:
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY)                         # post BUY at 100.0
+        _depth(br, 99.5, 500, 101.0, 10)          # fill long @ 100.0
+        assert br.n_fills == 1
+        return br
+
+    def test_stop_fires_on_large_adverse_move(self):
+        # STOP_LOSS_TICKS=12 → 0.60 below entry. mid=99.1 is 18 ticks adverse.
+        br = self._filled_long()
+        _depth(br, 99.0, 500, 99.2, 500)          # mid 99.1 → adverse 18 ticks ≥ 12
+        assert br._position_side == 0
+        assert br.trades[0]["exit_method"] == "taker_stop"
+        assert br.trades[0]["net_pnl"] < 0
+
+    def test_stop_does_not_fire_on_small_wobble(self):
+        # mid 99.85 is only 3 ticks adverse — below the 12-tick stop, must hold.
+        br = self._filled_long()
+        _depth(br, 99.8, 500, 99.9, 500)          # mid 99.85 → 3 ticks adverse
+        assert br._position_side == 1             # still in position
+        assert all(t["exit_method"] != "taker_stop" for t in br.trades)
+
+    def test_stop_threshold_is_active(self):
+        assert STOP_LOSS_TICKS > 0                # config sanity — stop is enabled
+
+
+# ── Risk — daily loss circuit breaker ─────────────────────────────────────────
+
+class TestDayRiskCircuitBreaker:
+    def test_halts_when_limit_breached(self):
+        risk = DayRisk(loss_limit=-7500.0)
+        risk.record(-5000.0)
+        assert not risk.halted
+        risk.record(-3000.0)                      # cumulative −8000 ≤ −7500
+        assert risk.halted
+
+    def test_stays_halted(self):
+        risk = DayRisk(loss_limit=-7500.0)
+        risk.record(-8000.0)
+        assert risk.halted
+        risk.record(+10000.0)                     # recovery does NOT un-halt
+        assert risk.halted
+
+    def test_halted_risk_blocks_new_entries(self):
+        risk = DayRisk(loss_limit=-7500.0)
+        risk.record(-8000.0)
+        br = PaperBroker("ICICIBANK", risk=risk)
+        _depth(br, *_BUY)                          # strong signal, but halted
+        assert br.n_posts == 0
+
+    def test_active_risk_allows_entries(self):
+        risk = DayRisk(loss_limit=-7500.0)
+        br = PaperBroker("HDFCBANK", risk=risk)
+        _depth(br, *_BUY)
+        assert br.n_posts == 1
+
+    def test_broker_records_pnl_to_risk(self):
+        risk = DayRisk(loss_limit=-7500.0)
+        br = PaperBroker("HDFCBANK", risk=risk)
+        _depth(br, *_BUY)                          # post
+        _depth(br, 99.5, 500, 101.0, 10)           # fill long @ 100.0
+        br.eod_force_close(ts_utc=datetime.now(UTC), mid=100.25)
+        assert risk.day_net_pnl == pytest.approx(br.cum_net_pnl)
+        assert len(br.trades) == 1
 
 
 # ── Dhan binary parser ────────────────────────────────────────────────────────
