@@ -242,6 +242,10 @@ The main service (`argus-paper-trader.service`) has `Restart=on-failure` — it 
 
 `paper_trader/report.py` runs at 15:50 IST via systemd. It reads today's `paper_trades.csv`, computes trade-level statistics (n_trades, net P&L, win rate, avg net, exit method breakdown, per-instrument breakdown), and emails the report to the configured address via Gmail SMTP.
 
+### Live Monitor
+
+A dependency-free terminal dashboard (`paper_trader/monitor/`) for watching the session in real time. The running trader writes an atomic live snapshot (`logs/paper_telemetry.json`, every 2 s); `serve_monitor.py` (Python stdlib `http.server`) merges it with the durable trade CSV and serves a `/api/monitor` endpoint plus a static UI (vanilla HTML/CSS/JS, hand-drawn canvas equity curve — no framework). Shows total/realized/unrealized P&L, win rate, fill rate, the day-risk gauge, intraday cumulative-P&L chart, open positions, and per-instrument + exit-method breakdowns. Binds `127.0.0.1` and is reached over an SSH tunnel — nothing is exposed publicly. See `paper_trader/MONITOR.md` for run instructions.
+
 ### Deployment
 
 See `paper_trader/DEPLOY.md` for the full setup guide. Summary:

@@ -19,9 +19,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from paper_trader.broker import PaperBroker, DayRisk
-from paper_trader.config import INSTRUMENTS, DAILY_LOSS_LIMIT
+from paper_trader.config import (
+    INSTRUMENTS, DAILY_LOSS_LIMIT, TELEMETRY_PATH, TELEMETRY_INTERVAL_SEC,
+)
 from paper_trader.contracts import resolve_security_ids
 from paper_trader.feed_client import run_depth_feed
+from paper_trader.telemetry import build_snapshot, write_snapshot_atomic
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,18 +89,35 @@ async def async_main() -> None:
                 ask_qty=ask_qty,
             )
 
+    async def telemetry_loop() -> None:
+        """Periodically write a live snapshot for the monitor dashboard."""
+        path = Path(TELEMETRY_PATH)
+        while True:
+            try:
+                write_snapshot_atomic(path, build_snapshot(brokers, risk))
+            except Exception as exc:  # never let telemetry kill the trader
+                log.warning("telemetry write failed: %s", exc)
+            await asyncio.sleep(TELEMETRY_INTERVAL_SEC)
+
     log.info("Starting Argus paper trader — instruments: %s", INSTRUMENTS)
 
     depth_task = asyncio.create_task(
         run_depth_feed(access_token, client_id, on_depth, security_ids),
         name="depth-feed",
     )
+    telemetry_task = asyncio.create_task(telemetry_loop(), name="telemetry")
 
     await stop_event.wait()
 
     log.info("Stopping feed tasks")
     depth_task.cancel()
-    await asyncio.gather(depth_task, return_exceptions=True)
+    telemetry_task.cancel()
+    await asyncio.gather(depth_task, telemetry_task, return_exceptions=True)
+    # Final snapshot so the monitor reflects the flat, post-close state.
+    try:
+        write_snapshot_atomic(Path(TELEMETRY_PATH), build_snapshot(brokers, risk))
+    except Exception as exc:
+        log.warning("final telemetry write failed: %s", exc)
     log.info("Paper trader stopped")
 
 

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ARGUS · Paper Monitor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">ARGUS</span>
+          <span class="brand-sub">PAPER&nbsp;TRADER&nbsp;·&nbsp;LIVE&nbsp;MONITOR</span>
+        </div>
+        <div class="topmeta">
+          <span class="meta"><label>SESSION</label><b id="session-date">—</b></span>
+          <span class="meta"><label>FEED</label><b id="feed-age">—</b></span>
+          <span class="meta"><label>SERVER</label><b id="server-time">—</b></span>
+          <span class="status" id="conn-status" data-state="boot">BOOT</span>
+        </div>
+      </header>
+
+      <section class="cards">
+        <div class="card card-hero" id="card-total">
+          <label>TOTAL P&amp;L</label>
+          <div class="value" id="total-pnl">—</div>
+          <div class="sub" id="total-sub">realized + unrealized</div>
+        </div>
+        <div class="card">
+          <label>REALIZED</label>
+          <div class="value" id="realized-pnl">—</div>
+          <div class="sub" id="realized-sub">closed trades</div>
+        </div>
+        <div class="card">
+          <label>UNREALIZED</label>
+          <div class="value" id="unrealized-pnl">—</div>
+          <div class="sub" id="unrealized-sub">open positions</div>
+        </div>
+        <div class="card">
+          <label>WIN RATE</label>
+          <div class="value" id="win-rate">—</div>
+          <div class="sub" id="winrate-sub">payoff —</div>
+        </div>
+        <div class="card">
+          <label>TRADES / FILLS</label>
+          <div class="value" id="trades-stat">—</div>
+          <div class="sub" id="fill-sub">fill rate —</div>
+        </div>
+        <div class="card">
+          <label>DAY RISK</label>
+          <div class="value" id="day-risk">—</div>
+          <div class="riskbar"><span id="risk-fill"></span></div>
+          <div class="sub" id="risk-sub">limit —</div>
+        </div>
+      </section>
+
+      <section class="chart-row">
+        <article class="panel chart-panel">
+          <div class="panel-head">
+            <h2>Intraday Cumulative P&amp;L</h2>
+            <span class="tag" id="equity-tag">realized equity curve</span>
+          </div>
+          <canvas id="equity-chart" width="1180" height="300"></canvas>
+        </article>
+      </section>
+
+      <section class="lower-grid">
+        <article class="panel">
+          <div class="panel-head"><h2>Open Positions</h2><span class="tag" id="open-count">0 live</span></div>
+          <div class="table" id="positions">
+            <div class="thead pos-row">
+              <div>SYM</div><div>SIDE</div><div>ENTRY</div><div>MID</div><div>QTY</div><div class="num">uP&amp;L</div>
+            </div>
+            <div id="positions-body"><div class="empty">flat — no open positions</div></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head"><h2>Per Instrument</h2><span class="tag">realized today</span></div>
+          <div class="table" id="instruments">
+            <div class="thead inst-row">
+              <div>SYM</div><div class="num">NET</div><div class="num">TRADES</div><div class="num">WR</div>
+            </div>
+            <div id="instrument-body"><div class="empty">no trades yet</div></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head"><h2>Exit Breakdown</h2><span class="tag">maker vs taker</span></div>
+          <div class="table" id="exits">
+            <div class="thead exit-row">
+              <div>METHOD</div><div class="num">N</div><div class="num">NET</div><div class="num">WR</div>
+            </div>
+            <div id="exit-body"><div class="empty">no trades yet</div></div>
+          </div>
+        </article>
+      </section>
+
+      <footer class="footer">
+        <span id="err-line"></span>
+        <span class="poll-note">polling /api/monitor · 1 Hz</span>
+      </footer>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

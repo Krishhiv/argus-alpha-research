@@ -150,6 +150,37 @@ class PaperBroker:
         self._prev_ask_qty = float("nan")
         self._trading_date = ""
         self.last_mid      = 0.0   # most recent (bid+ask)/2; used by shutdown handler
+        self._last_packet_ts: Optional[datetime] = None   # for monitor freshness
+
+    # ── Live snapshot (for the monitor) ────────────────────────────────────────
+
+    def snapshot(self, *, now: Optional[datetime] = None) -> dict:
+        """Current live state for the monitoring dashboard. Read-only."""
+        qty = self.lot_size * N_LOTS
+        unrealized = 0.0
+        if self._position_side != 0 and self.last_mid > 0.0:
+            unrealized = self._position_side * (self.last_mid - self._entry_price) * qty
+        age = None
+        if self._last_packet_ts is not None:
+            ref = now or datetime.now(timezone.utc)
+            age = round((ref - self._last_packet_ts).total_seconds(), 2)
+        return {
+            "underlying":     self.underlying,
+            "position_side":  self._position_side,
+            "entry_price":    round(self._entry_price, 4) if self._position_side else None,
+            "entry_ts":       self._entry_ts.isoformat() if (self._position_side and self._entry_ts) else None,
+            "last_mid":       round(self.last_mid, 4),
+            "qty":            qty,
+            "unrealized_pnl": round(unrealized, 2),
+            "pending_entry":  self._pending_entry.side if self._pending_entry else 0,
+            "pending_exit":   self._pending_exit is not None,
+            "n_posts":        self.n_posts,
+            "n_fills":        self.n_fills,
+            "n_cancels":      self.n_cancels,
+            "n_trades":       len(self.trades),
+            "realized_pnl":   round(self.cum_net_pnl, 2),
+            "last_packet_age_sec": age,
+        }
 
     # ── Market feed (no-op — Dhan only allows one connection per account) ──────
 
@@ -174,6 +205,7 @@ class PaperBroker:
         if bid_price <= 0.0 or ask_price <= 0.0 or ask_price < bid_price:
             return
 
+        self._last_packet_ts = ts_utc
         i   = self._packet_idx
         self._packet_idx += 1
         mid = (bid_price + ask_price) / 2.0

@@ -55,6 +55,7 @@ trade_log_*.csv
 
 # Paper trader runtime logs (keep directory, ignore contents)
 paper_trader/logs/*.csv
+paper_trader/logs/*.json
 
 ALPHA_RESEARCH.md
 PAPER_TRADING_PLAN.md
