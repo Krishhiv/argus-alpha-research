@@ -20,7 +20,9 @@ VPS_HOST="${ARGUS_VPS_HOST:-lightsail-mumbai}"
 PORT="${ARGUS_MONITOR_PORT:-8082}"
 REMOTE_DIR="${ARGUS_REMOTE_DIR:-/home/ubuntu/paper-trader}"
 URL="http://127.0.0.1:${PORT}"
-PGREP_PAT="serve_monitor.*--port ${PORT}"
+# Bracket trick so the pattern never matches the shell that runs pkill itself
+# (the literal "[s]erve_monitor" in that command line does not match this regex).
+KILL_PAT="[s]erve_monitor.*--port ${PORT}"
 
 started_by_us=0
 tunnel_pid=""
@@ -31,15 +33,17 @@ cleanup() {
     echo "• tunnel closed"
   fi
   if [[ "$started_by_us" == "1" ]]; then
-    ssh "$VPS_HOST" "pkill -f '${PGREP_PAT}'" 2>/dev/null && echo "• monitor server stopped on VPS" || true
+    ssh "$VPS_HOST" "pkill -f '${KILL_PAT}'" 2>/dev/null && echo "• monitor server stopped on VPS" || true
   fi
 }
 trap cleanup EXIT INT TERM
 
 echo "Argus paper monitor  →  ${VPS_HOST}  (port ${PORT})"
 
-# 1. Ensure the monitor server is running on the VPS (idempotent).
-if ssh "$VPS_HOST" "pgrep -f '${PGREP_PAT}' >/dev/null 2>&1"; then
+# 1. Ensure the monitor server is running on the VPS (idempotent). Probe whether
+#    it actually RESPONDS rather than whether a process name exists — avoids the
+#    pgrep self-match false positive and verifies the service is truly up.
+if ssh "$VPS_HOST" "curl -fsS -o /dev/null http://127.0.0.1:${PORT}/api/monitor 2>/dev/null"; then
   echo "• monitor server already running on VPS"
 else
   echo "• starting monitor server on VPS..."
