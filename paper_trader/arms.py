@@ -28,7 +28,10 @@ from paper_trader.config import INSTRUMENTS
 # Proven universe + the expansion candidates under evaluation (mid-priced, liquid,
 # cross-sector; chosen for favourable per-share fee economics — see README).
 BASE_UNIVERSE: list[str]    = list(INSTRUMENTS)            # HDFCBANK, ICICIBANK, RELIANCE
-NEW_CANDIDATES: list[str]   = ["SBIN", "AXISBANK", "ITC", "TATAMOTORS"]
+# Cross-sector for real diversification (banks correlate): SBIN/AXISBANK (banks),
+# ITC (FMCG), BHARTIARTL (telecom). All mid-priced + liquid → favourable fee
+# economics. (TATAMOTORS has no active future in the master — demerged.)
+NEW_CANDIDATES: list[str]   = ["SBIN", "AXISBANK", "ITC", "BHARTIARTL"]
 EXPANDED_UNIVERSE: list[str] = BASE_UNIVERSE + NEW_CANDIDATES
 
 CHAMPION = StrategyParams()   # current live config: stop=12, hold=250, margin=1.0
