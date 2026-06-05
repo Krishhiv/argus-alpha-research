@@ -32,8 +32,8 @@ if __package__ in {None, ""}:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from paper_trader.config import TRADES_LOG, TELEMETRY_PATH
-from paper_trader.monitor.metrics import read_trades, realized_metrics, today_ist
+from paper_trader.config import TELEMETRY_PATH
+from paper_trader.monitor.metrics import realized_for_arms, today_ist
 from paper_trader.telemetry import load_snapshot
 
 logger = logging.getLogger("argus.monitor")
@@ -42,29 +42,40 @@ _STATIC_DIR = Path(__file__).resolve().parent / "dashboard"
 _LIVE_STALE_SEC = 15.0   # snapshot older than this → trader considered offline
 
 
-def build_payload(trades_path: Path, telemetry_path: Path) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+def build_payload(telemetry_path: Path) -> dict[str, Any]:
+    """Merge per-arm realized metrics (from CSVs) with the live combined snapshot."""
+    now  = datetime.now(timezone.utc)
     date = today_ist()
-    realized = realized_metrics(read_trades(trades_path), date)
+    realized = realized_for_arms(date)            # {arm: realized_metrics}
 
-    live: dict[str, Any] | None = None
+    live_arms: dict[str, Any] = {}
     live_online = False
     try:
-        live = load_snapshot(telemetry_path)
-        gen = live.get("generated_at")
+        snap = load_snapshot(telemetry_path)
+        gen  = snap.get("generated_at")
         if gen:
             age = (now - datetime.fromisoformat(gen)).total_seconds()
             live_online = age < _LIVE_STALE_SEC
-            live["age_sec"] = round(age, 1)
+        live_arms = snap.get("arms", {})
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
-        live = None
+        live_arms = {}
+
+    names = sorted(set(realized) | set(live_arms))
+    arms: dict[str, Any] = {}
+    for name in names:
+        live = live_arms.get(name)
+        arms[name] = {
+            "realized": realized.get(name, {}),
+            "live":     live,
+            "note":     (live or {}).get("note", ""),
+            "universe": (live or {}).get("universe", []),
+        }
 
     return {
         "server_time": now.isoformat(),
         "date": date,
         "live_online": live_online,
-        "realized": realized,
-        "live": live,
+        "arms": arms,
     }
 
 
@@ -90,7 +101,7 @@ class _MonitorHandler(SimpleHTTPRequestHandler):
 
     def _serve_api(self) -> None:
         try:
-            payload = build_payload(self.server.trades_path, self.server.telemetry_path)  # type: ignore[attr-defined]
+            payload = build_payload(self.server.telemetry_path)  # type: ignore[attr-defined]
         except Exception as exc:  # pragma: no cover - defensive
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
             return
@@ -109,8 +120,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Serve the paper-trader monitor dashboard.")
     p.add_argument("--host", default="127.0.0.1", help="Bind host (keep 127.0.0.1 for SSH tunneling).")
     p.add_argument("--port", type=int, default=8082, help="Bind port.")
-    p.add_argument("--trades-path", default=TRADES_LOG, help="Trade CSV path.")
-    p.add_argument("--telemetry-path", default=TELEMETRY_PATH, help="Live telemetry JSON path.")
+    p.add_argument("--telemetry-path", default=TELEMETRY_PATH, help="Live combined telemetry JSON path.")
     return p.parse_args()
 
 
@@ -119,11 +129,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     server = ThreadingHTTPServer((args.host, args.port), _MonitorHandler)
-    server.trades_path = Path(args.trades_path).expanduser().resolve()        # type: ignore[attr-defined]
     server.telemetry_path = Path(args.telemetry_path).expanduser().resolve()  # type: ignore[attr-defined]
 
     logger.info("Monitor on http://%s:%d", args.host, args.port)
-    logger.info("Trades:    %s", server.trades_path)      # type: ignore[attr-defined]
     logger.info("Telemetry: %s", server.telemetry_path)   # type: ignore[attr-defined]
     logger.info("Tunnel: ssh -N -L %d:127.0.0.1:%d lightsail-mumbai", args.port, args.port)
     try:

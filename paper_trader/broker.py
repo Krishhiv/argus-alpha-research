@@ -46,7 +46,7 @@ from paper_trader.config import (
     QUEUE_FILL_MIN_FRAC, EDGE_MARGIN, NO_NEW_ENTRY_IST,
     STOP_LOSS_TICKS,
 )
-from paper_trader.logger import log_trade, log_order_event, log_pnl_snapshot
+from paper_trader.logger import default_logger
 from paper_trader.signal import compute_micro_deviation
 
 log = logging.getLogger("argus.broker")
@@ -76,6 +76,27 @@ class DayRisk:
             self.halted = True
             log.warning("DAILY LOSS LIMIT hit (%.0f ≤ %.0f) — halting new entries",
                         self.day_net_pnl, self.loss_limit)
+
+
+@dataclass
+class StrategyParams:
+    """
+    Per-arm strategy configuration. Defaults reproduce the live champion, so
+    PaperBroker() with no params behaves exactly as before. Each parallel arm
+    passes its own StrategyParams to vary stop / hold / margin / exit-mode etc.
+    """
+    entry_threshold:     float = ENTRY_THRESHOLD
+    edge_margin:         float = EDGE_MARGIN
+    max_hold_packets:    int   = MAX_HOLD_PACKETS
+    order_timeout_pkts:  int   = ORDER_TIMEOUT_PKTS
+    min_hold_pkts:       int   = MIN_HOLD_PKTS
+    queue_fill_min_frac: float = QUEUE_FILL_MIN_FRAC
+    stop_loss_ticks:     int   = STOP_LOSS_TICKS
+    n_lots:              int   = N_LOTS
+    tick_size:           float = TICK_SIZE
+    no_new_entry_ist:    str   = NO_NEW_ENTRY_IST
+    exit_mode:           str   = "maker"   # "maker" | "reversal"
+
 
 # NSE futures fee schedule (Dhan)
 _BROKERAGE_PER_ORDER  = 20.0
@@ -120,11 +141,18 @@ class PaperBroker:
     on_market_packet() is a no-op — fill detection uses depth only.
     """
 
-    def __init__(self, underlying: str, risk: Optional[DayRisk] = None) -> None:
+    def __init__(self, underlying: str, risk: Optional[DayRisk] = None,
+                 params: Optional[StrategyParams] = None,
+                 lot_size: Optional[int] = None, logger=None) -> None:
         self.underlying  = underlying
-        self.lot_size    = LOT_SIZES[underlying]
+        # lot_size is injected by the runner (resolved from the instrument
+        # master); falls back to the static LOT_SIZES table for tests / the
+        # original universe.
+        self.lot_size    = lot_size if lot_size is not None else LOT_SIZES[underlying]
         self._risk       = risk                   # shared session risk governor
-        h, m             = NO_NEW_ENTRY_IST.split(":")
+        self._logger     = logger or default_logger   # per-arm CSV logger
+        self.p           = params or StrategyParams()
+        h, m             = self.p.no_new_entry_ist.split(":")
         self._no_entry_after = (int(h), int(m))   # (hour, minute) IST cutoff
 
         # State
@@ -137,7 +165,7 @@ class PaperBroker:
         self._entry_ts: Optional[datetime] = None
 
         self._prev_abs_sig     = 0.0
-        self._last_exit_packet = -(ORDER_TIMEOUT_PKTS + 1)
+        self._last_exit_packet = -(self.p.order_timeout_pkts + 1)
 
         # Accumulators
         self.n_posts   = 0
@@ -156,7 +184,7 @@ class PaperBroker:
 
     def snapshot(self, *, now: Optional[datetime] = None) -> dict:
         """Current live state for the monitoring dashboard. Read-only."""
-        qty = self.lot_size * N_LOTS
+        qty = self.lot_size * self.p.n_lots
         unrealized = 0.0
         if self._position_side != 0 and self.last_mid > 0.0:
             unrealized = self._position_side * (self.last_mid - self._entry_price) * qty
@@ -228,15 +256,15 @@ class PaperBroker:
             # Economic edge gate: only quote when the half-spread we'd capture
             # covers our per-share round-trip fee with margin. Self-calibrating
             # per instrument from the live mid.
-            qty          = self.lot_size * N_LOTS
-            breakeven_sh = _compute_fee(mid, mid, self.lot_size, N_LOTS, 1) / qty
+            qty          = self.lot_size * self.p.n_lots
+            breakeven_sh = _compute_fee(mid, mid, self.lot_size, self.p.n_lots, 1) / qty
             half_spread  = (ask_price - bid_price) / 2.0
 
             ist          = ts_utc.astimezone(IST)
-            cross_ok     = self._prev_abs_sig < ENTRY_THRESHOLD
-            cooldown_ok  = (i - self._last_exit_packet) > ORDER_TIMEOUT_PKTS
-            signal_ok    = abs(sig) >= ENTRY_THRESHOLD
-            edge_ok      = half_spread >= EDGE_MARGIN * breakeven_sh
+            cross_ok     = self._prev_abs_sig < self.p.entry_threshold
+            cooldown_ok  = (i - self._last_exit_packet) > self.p.order_timeout_pkts
+            signal_ok    = abs(sig) >= self.p.entry_threshold
+            edge_ok      = half_spread >= self.p.edge_margin * breakeven_sh
             time_ok      = (ist.hour, ist.minute) < self._no_entry_after
             breaker_ok   = self._risk is None or not self._risk.halted
 
@@ -249,7 +277,7 @@ class PaperBroker:
                     queue_ahead=bid_qty if side > 0 else ask_qty,
                 )
                 self.n_posts += 1
-                log_order_event(self.underlying, "post", side, post_price, self.lot_size * N_LOTS)
+                self._logger.order_event(self.underlying, "post", side, post_price, self.lot_size * self.p.n_lots)
 
         # ── STATE 2: pending entry ────────────────────────────────────────────
         elif self._position_side == 0 and self._pending_entry is not None:
@@ -261,7 +289,7 @@ class PaperBroker:
 
             queue_ok = (
                 o.queue_ahead <= 0 or
-                o.qty_consumed >= QUEUE_FILL_MIN_FRAC * o.queue_ahead
+                o.qty_consumed >= self.p.queue_fill_min_frac * o.queue_ahead
             )
             if fill_candidate and queue_ok:
                 self._position_side = o.side
@@ -270,29 +298,37 @@ class PaperBroker:
                 self._entry_ts      = ts_utc
                 self._pending_entry = None
                 self.n_fills       += 1
-                log_order_event(self.underlying, "fill_confirmed", o.side,
-                                o.price, self.lot_size * N_LOTS, "depth_only")
+                self._logger.order_event(self.underlying, "fill_confirmed", o.side,
+                                         o.price, self.lot_size * self.p.n_lots, "depth_only")
 
-            elif (i - o.post_packet) >= ORDER_TIMEOUT_PKTS:
+            elif (i - o.post_packet) >= self.p.order_timeout_pkts:
                 self._pending_entry = None
                 self.n_cancels     += 1
-                log_order_event(self.underlying, "cancel", o.side, o.price,
-                                self.lot_size * N_LOTS)
+                self._logger.order_event(self.underlying, "cancel", o.side, o.price,
+                                         self.lot_size * self.p.n_lots)
 
         # ── STATE 3 & 4: in position ─────────────────────────────────────────
         elif self._position_side != 0:
             packets_held  = i - self._entry_packet
-            adverse_ticks = self._position_side * (self._entry_price - mid) / TICK_SIZE
+            adverse_ticks = self._position_side * (self._entry_price - mid) / self.p.tick_size
 
             # Hard price stop: bail at market if the position has run adverse
-            # beyond STOP_LOSS_TICKS, rather than waiting for the time-based exit.
-            if STOP_LOSS_TICKS > 0 and adverse_ticks >= STOP_LOSS_TICKS:
-                taker_price = mid + (-self._position_side) * TICK_SIZE
+            # beyond stop_loss_ticks, rather than waiting for the time-based exit.
+            if self.p.stop_loss_ticks > 0 and adverse_ticks >= self.p.stop_loss_ticks:
+                taker_price = mid + (-self._position_side) * self.p.tick_size
                 self._close_position(taker_price, "taker_stop", i, ts_utc, mid)
+
+            # Signal-reversal exit (reversal mode only): the entry thesis is dead
+            # — the microprice now points against the position. Bail at market.
+            elif (self.p.exit_mode == "reversal"
+                  and self._position_side * sig < 0
+                  and abs(sig) >= self.p.entry_threshold):
+                taker_price = mid + (-self._position_side) * self.p.tick_size
+                self._close_position(taker_price, "taker_reversal", i, ts_utc, mid)
 
             else:
                 # Post passive exit only after minimum hold period
-                if self._pending_exit is None and packets_held >= MIN_HOLD_PKTS:
+                if self._pending_exit is None and packets_held >= self.p.min_hold_pkts:
                     side       = -self._position_side
                     post_price = ask_price if self._position_side > 0 else bid_price
                     self._pending_exit = _Order(
@@ -311,11 +347,11 @@ class PaperBroker:
                     )
                     if exit_candidate:
                         self._close_position(ex.price, "maker_exit", i, ts_utc, mid)
-                    elif packets_held >= MAX_HOLD_PACKETS:
-                        taker_price = mid + (-self._position_side) * TICK_SIZE
+                    elif packets_held >= self.p.max_hold_packets:
+                        taker_price = mid + (-self._position_side) * self.p.tick_size
                         self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
-                elif packets_held >= MAX_HOLD_PACKETS:
-                    taker_price = mid + (-self._position_side) * TICK_SIZE
+                elif packets_held >= self.p.max_hold_packets:
+                    taker_price = mid + (-self._position_side) * self.p.tick_size
                     self._close_position(taker_price, "taker_max_hold", i, ts_utc, mid)
 
         self._prev_abs_sig = abs(sig)
@@ -327,7 +363,7 @@ class PaperBroker:
             close_mid = mid if (mid and mid > 0.0) else self.last_mid
             if not close_mid or close_mid <= 0.0:
                 close_mid = self._entry_price
-            taker_price = close_mid + (-self._position_side) * TICK_SIZE
+            taker_price = close_mid + (-self._position_side) * self.p.tick_size
             self._close_position(taker_price, "taker_eod",
                                  self._packet_idx, ts_utc, close_mid)
 
@@ -337,7 +373,7 @@ class PaperBroker:
         self._pending_entry    = None
         self._pending_exit     = None
         self._prev_abs_sig     = 0.0
-        self._last_exit_packet = -(ORDER_TIMEOUT_PKTS + 1)
+        self._last_exit_packet = -(self.p.order_timeout_pkts + 1)
         self._prev_bid_qty     = float("nan")
         self._prev_ask_qty     = float("nan")
 
@@ -345,10 +381,10 @@ class PaperBroker:
 
     def _close_position(self, exit_price: float, method: str,
                         exit_packet: int, exit_ts: datetime, mid: float) -> None:
-        qty       = self.lot_size * N_LOTS
+        qty       = self.lot_size * self.p.n_lots
         gross     = self._position_side * (exit_price - self._entry_price) * qty
         fee       = _compute_fee(self._entry_price, exit_price,
-                                 self.lot_size, N_LOTS, self._position_side)
+                                 self.lot_size, self.p.n_lots, self._position_side)
         net       = round(gross - fee, 2)
         hold_pkts = exit_packet - self._entry_packet
 
@@ -364,7 +400,7 @@ class PaperBroker:
             "exit_method":  method,
             "fill_layer":   "depth_only",
             "lot_size":     self.lot_size,
-            "n_lots":       N_LOTS,
+            "n_lots":       self.p.n_lots,
             "notional":     round(self._entry_price * qty, 2),
             "hold_packets": hold_pkts,
             "hold_secs":    round(hold_pkts * 0.4, 1),
@@ -382,8 +418,8 @@ class PaperBroker:
         self._pending_exit   = None
         self._last_exit_packet = exit_packet
 
-        log_trade(trade)
-        log_pnl_snapshot(
+        self._logger.trade(trade)
+        self._logger.pnl_snapshot(
             self.underlying, self._trading_date,
             self.cum_net_pnl, len(self.trades),
             self.n_posts, self.n_fills,

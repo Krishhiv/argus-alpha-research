@@ -56,6 +56,8 @@ trade_log_*.csv
 # Paper trader runtime logs (keep directory, ignore contents)
 paper_trader/logs/*.csv
 paper_trader/logs/*.json
+# per-arm logs from the multi-arm harness
+paper_trader/logs/arms/
 
 ALPHA_RESEARCH.md
 PAPER_TRADING_PLAN.md

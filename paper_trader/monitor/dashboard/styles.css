@@ -104,6 +104,15 @@ html, body {
 .footer { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 0.68rem; color: var(--dim); }
 #err-line { color: var(--amber); }
 
+/* ── Arm leaderboard + detail ─────────────────────────────────────────── */
+.arm-row { grid-template-columns: 1.3fr 1fr 1fr 0.9fr 0.7fr 0.6fr 1fr 1.7fr; }
+.clickable { cursor: pointer; }
+.row.clickable:hover { background: #161c22; }
+.row.selected { background: #14201c; box-shadow: inset 2px 0 0 var(--green); }
+.dim { color: var(--dim); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-head { display: flex; align-items: baseline; gap: 12px; margin: 20px 0 10px; padding-top: 4px; }
+.detail-head h2 { margin: 0; font-size: 1.05rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+
 @media (max-width: 980px) {
   .cards { grid-template-columns: repeat(2, 1fr); }
   .lower-grid { grid-template-columns: 1fr; }

@@ -1,21 +1,20 @@
 """
-Daily paper trading report — emails a summary to krishhiv@gmail.com.
+Daily paper-trading report — emails a multi-arm comparison to krishhiv@gmail.com.
 
-Triggered by systemd timer at 15:50 IST (10:20 UTC) Mon–Fri.
-Reads today's trades from paper_trader/logs/paper_trades.csv,
-computes key metrics, and sends a plain-text email with a PnL summary.
+Triggered by systemd timer at 15:50 IST (10:20 UTC) Mon–Fri. Reads each arm's
+trade log under paper_trader/logs/arms/<arm>/paper_trades.csv, computes today's
+stats plus the running cumulative, and emails a ranked comparison so we can see
+which version wins and why (per-instrument + exit breakdown).
 
 Gmail credentials read from .env (REPORT_EMAIL_FROM, GMAIL_APP_PASSWORD).
-Recipient is hardcoded — not read from .env.
+Recipient is hardcoded — never read from .env.
 """
 
 from __future__ import annotations
 
-import csv
 import os
 import smtplib
 import sys
-from datetime import date, datetime, timezone, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -25,107 +24,63 @@ try:
 except ModuleNotFoundError:
     pass
 
-from paper_trader.config import REPORT_EMAIL_TO, TRADES_LOG
-
-IST = timezone(timedelta(hours=5, minutes=30))
-
-
-def _today_ist() -> str:
-    return datetime.now(IST).strftime("%Y-%m-%d")
+from paper_trader.config import REPORT_EMAIL_TO
+from paper_trader.monitor.metrics import (
+    today_ist, discover_arms, realized_for_arms, cumulative_for_arm,
+)
 
 
-def _load_today_trades(trading_date: str) -> list[dict]:
-    path = Path(TRADES_LOG)
-    if not path.exists():
-        return []
-    with open(path) as f:
-        return [r for r in csv.DictReader(f) if r.get("date") == trading_date]
+def _m(n: float) -> str:
+    return ("+" if n >= 0 else "−") + "₹" + format(abs(round(n)), ",")
 
 
-def _compute_metrics(trades: list[dict]) -> dict:
-    if not trades:
-        return {}
-    net_pnls   = [float(t["net_pnl"]) for t in trades]
-    gross_pnls = [float(t["gross_pnl"]) for t in trades]
-    winners    = [p for p in net_pnls if p > 0]
-    losers     = [p for p in net_pnls if p <= 0]
-    exit_methods = {}
-    for t in trades:
-        em = t.get("exit_method", "?")
-        exit_methods[em] = exit_methods.get(em, 0) + 1
+def _build_body(date: str, realized: dict[str, dict], cum: dict[str, dict]) -> str:
+    # Rank arms by today's net P&L (descending).
+    order = sorted(realized.keys(), key=lambda a: realized[a]["net_pnl"], reverse=True)
 
-    return {
-        "n_trades":        len(trades),
-        "net_pnl":         round(sum(net_pnls), 2),
-        "gross_pnl":       round(sum(gross_pnls), 2),
-        "total_fees":      round(sum(gross_pnls) - sum(net_pnls), 2),
-        "win_rate":        round(len(winners) / len(trades), 3),
-        "avg_net":         round(sum(net_pnls) / len(trades), 2),
-        "avg_winner":      round(sum(winners) / len(winners), 2) if winners else 0,
-        "avg_loser":       round(sum(losers) / len(losers), 2) if losers else 0,
-        "exit_methods":    exit_methods,
-        "best_trade":      round(max(net_pnls), 2),
-        "worst_trade":     round(min(net_pnls), 2),
-    }
+    lines = [f"Argus Paper — Multi-Arm — {date}", "=" * 60, "", "LEADERBOARD (today)", "-" * 60,
+             f"  {'arm':<11}{'today':>11}{'trades':>8}{'WR':>6}{'cumulative':>14}"]
+    for a in order:
+        r, c = realized[a], cum.get(a, {})
+        wr = f"{r['win_rate']*100:.0f}%" if r["n_trades"] else "—"
+        cumtxt = f"{_m(c.get('total_net', 0))} ({c.get('n_days', 0)}d)"
+        lines.append(f"  {a:<11}{_m(r['net_pnl']):>11}{r['n_trades']:>8}{wr:>6}{cumtxt:>14}")
 
-
-def _per_instrument(trades: list[dict]) -> dict[str, dict]:
-    by_inst: dict[str, list] = {}
-    for t in trades:
-        by_inst.setdefault(t["underlying"], []).append(t)
-    return {inst: _compute_metrics(ts) for inst, ts in by_inst.items()}
-
-
-def _build_body(trading_date: str, m: dict, by_inst: dict[str, dict],
-                n_posts: int | None = None) -> str:
-    sign = "+" if m.get("net_pnl", 0) >= 0 else ""
-    lines = [
-        f"Argus Paper Trading — {trading_date}",
-        "=" * 45,
-        "",
-        f"  Net PnL      ₹{sign}{m['net_pnl']:,.0f}",
-        f"  Gross PnL    ₹{sign}{m['gross_pnl']:,.0f}",
-        f"  Total fees   ₹{m['total_fees']:,.0f}",
-        f"  Trades       {m['n_trades']}",
-        f"  Win rate     {m['win_rate']:.1%}",
-        f"  Avg net/trade ₹{m['avg_net']:+.0f}",
-        f"  Best trade   ₹{m['best_trade']:+.0f}",
-        f"  Worst trade  ₹{m['worst_trade']:+.0f}",
-        "",
-        "Exit breakdown:",
-    ]
-    for method, count in m.get("exit_methods", {}).items():
-        lines.append(f"  {method:<20} {count}")
-
-    lines += ["", "Per instrument:", "-" * 35]
-    for inst, im in by_inst.items():
-        if not im:
+    lines += ["", "PER-ARM DETAIL", "=" * 60]
+    for a in order:
+        r = realized[a]
+        lines += ["", f"── {a} ──"]
+        if r["n_trades"] == 0:
+            lines.append("  no trades today")
             continue
-        sign_i = "+" if im["net_pnl"] >= 0 else ""
-        lines.append(
-            f"  {inst:<12} ₹{sign_i}{im['net_pnl']:>8,.0f}  "
-            f"{im['n_trades']} trades  WR {im['win_rate']:.0%}"
+        lines.append(f"  net {_m(r['net_pnl'])} · {r['n_trades']} trades · "
+                     f"WR {r['win_rate']*100:.0f}% · payoff {r['payoff']:.2f} · "
+                     f"W {_m(r['avg_win'])}/L {_m(r['avg_loss'])}")
+        inst = " | ".join(
+            f"{s} {_m(d['net'])} ({d['n']},{d['win_rate']*100:.0f}%)"
+            for s, d in sorted(r["per_instrument"].items(), key=lambda kv: -kv[1]["net"])
         )
+        lines.append(f"  instruments: {inst}")
+        exits = " | ".join(
+            f"{m} {d['n']}@{_m(d['net'])} ({d['win_rate']*100:.0f}%)"
+            for m, d in sorted(r["exit_breakdown"].items(), key=lambda kv: -kv[1]["net"])
+        )
+        lines.append(f"  exits: {exits}")
 
-    lines += [
-        "",
-        "─" * 45,
-        "Backtest baseline (OOS test): net ₹+1.05L / 5 days",
-        "─" * 45,
-    ]
+    lines += ["", "─" * 60,
+              "Arms run in parallel on the same live feed (risk-free paper).",
+              "Decide on the 10-day cumulative + consistency, not one day.", "─" * 60]
     return "\n".join(lines)
 
 
 def _send(subject: str, body: str) -> None:
     from_addr    = os.environ["REPORT_EMAIL_FROM"]
     app_password = os.environ["GMAIL_APP_PASSWORD"]
-
     msg = EmailMessage()
     msg["From"]    = from_addr
-    msg["To"]      = REPORT_EMAIL_TO
+    msg["To"]      = REPORT_EMAIL_TO        # hardcoded recipient — never from env
     msg["Subject"] = subject
     msg.set_content(body)
-
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
         smtp.login(from_addr, app_password)
         smtp.send_message(msg)
@@ -133,25 +88,26 @@ def _send(subject: str, body: str) -> None:
 
 
 def main() -> int:
-    trading_date = _today_ist()
-    trades = _load_today_trades(trading_date)
-
-    if not trades:
-        print(f"No paper trades found for {trading_date} — skipping report.")
+    date = today_ist()
+    arms = discover_arms()
+    if not arms:
+        print(f"No arms found for {date} — skipping report.")
         return 0
 
-    m       = _compute_metrics(trades)
-    by_inst = _per_instrument(trades)
-    body    = _build_body(trading_date, m, by_inst)
+    realized = realized_for_arms(date)
+    cum      = {a: cumulative_for_arm(a) for a in arms}
 
-    sign    = "+" if m["net_pnl"] >= 0 else ""
-    subject = (
-        f"Argus Paper — {trading_date} — "
-        f"₹{sign}{m['net_pnl']:,.0f} net | "
-        f"{m['n_trades']} trades | "
-        f"WR {m['win_rate']:.0%}"
-    )
+    if all(r["n_trades"] == 0 for r in realized.values()):
+        print(f"No paper trades for {date} across any arm — skipping report.")
+        return 0
 
+    body = _build_body(date, realized, cum)
+
+    # Subject: best arm today + the control baseline.
+    best = max(realized, key=lambda a: realized[a]["net_pnl"])
+    ctrl = realized.get("control", realized[best])
+    subject = (f"Argus Paper — {date} — best {best} {_m(realized[best]['net_pnl'])} "
+               f"| control {_m(ctrl['net_pnl'])}")
     _send(subject, body)
     return 0
 

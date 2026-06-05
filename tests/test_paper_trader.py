@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from paper_trader.signal import compute_micro_deviation
-from paper_trader.broker import PaperBroker, DayRisk, _compute_fee
+from paper_trader.broker import PaperBroker, DayRisk, StrategyParams, _compute_fee
 from paper_trader.dhan_parser import (
     DepthSidePacket,
     TickerPacket,
@@ -389,6 +389,42 @@ class TestBrokerStopLoss:
 
     def test_stop_threshold_is_active(self):
         assert STOP_LOSS_TICKS > 0                # config sanity — stop is enabled
+
+
+# ── Broker — per-arm StrategyParams + reversal exit ───────────────────────────
+
+class TestStrategyParams:
+    def _open_long(self, params: StrategyParams) -> PaperBroker:
+        br = PaperBroker("HDFCBANK", params=params)
+        _depth(br, *_BUY)                          # post long @ 100.0
+        _depth(br, 99.5, 500, 101.0, 10)           # fill long @ 100.0
+        assert br.n_fills == 1
+        return br
+
+    def test_custom_stop_disabled(self):
+        # stop_loss_ticks=0 → a large adverse move does NOT stop out
+        br = self._open_long(StrategyParams(stop_loss_ticks=0))
+        _depth(br, 99.0, 500, 99.2, 500)           # mid 99.1 → 18 ticks adverse
+        assert br._position_side == 1              # still in position, no stop
+        assert all(t["exit_method"] != "taker_stop" for t in br.trades)
+
+    def test_reversal_exit_fires_on_signal_flip(self):
+        br = self._open_long(StrategyParams(exit_mode="reversal"))
+        # ask-heavy book → micro_deviation strongly negative, opposes the long
+        _depth(br, 100.0, 10, 101.0, 990)          # sig ≈ −0.49
+        assert br._position_side == 0
+        assert br.trades[0]["exit_method"] == "taker_reversal"
+
+    def test_maker_mode_holds_through_signal_flip(self):
+        # Same flip, but default maker mode does NOT reversal-exit
+        br = self._open_long(StrategyParams())     # exit_mode="maker"
+        _depth(br, 100.0, 10, 101.0, 990)
+        assert br._position_side == 1              # still long
+        assert all(t["exit_method"] != "taker_reversal" for t in br.trades)
+
+    def test_params_default_matches_config(self):
+        p = StrategyParams()
+        assert p.stop_loss_ticks == STOP_LOSS_TICKS and p.max_hold_packets == MAX_HOLD_PACKETS
 
 
 # ── Risk — daily loss circuit breaker ─────────────────────────────────────────

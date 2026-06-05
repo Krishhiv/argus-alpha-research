@@ -6,18 +6,21 @@ only and is reached over an SSH tunnel — **nothing is exposed publicly**.
 
 ## What it shows
 
-- **Total / Realized / Unrealized P&L** — realized from the trade log, unrealized
-  marked from the live position state.
-- **Win rate, payoff, avg win/loss, trades, fill rate.**
-- **Day-risk gauge** — day P&L vs the −₹20,000 circuit breaker.
-- **Intraday cumulative P&L** — the headline equity curve (with a live dashed
-  segment for open-position mark-to-market).
-- **Open positions** — side, entry, mid, qty, unrealized P&L (live).
-- **Per-instrument** realized breakdown and **exit-method** breakdown
-  (maker_exit / taker_max_hold / taker_stop).
+The trader runs several strategy **arms** in parallel (see `paper_trader/arms.py`)
+on one shared feed. The dashboard has two layers:
 
-Realized metrics come from the durable CSV logs, so the dashboard works even when
-the trader is stopped (e.g. reviewing after close). Live panels (positions,
+- **Arm leaderboard** (top) — every arm ranked by total P&L, with realized,
+  unrealized, trades, win rate and day-risk. Click an arm to drill in.
+- **Selected-arm detail** (below) — for the chosen arm:
+  - **Total / Realized / Unrealized P&L**, win rate, payoff, trades, fill rate.
+  - **Day-risk gauge** — day P&L vs the −₹20,000 circuit breaker.
+  - **Intraday cumulative P&L** — the headline equity curve (with a live dashed
+    segment for open-position mark-to-market).
+  - **Open positions**, **per-instrument** breakdown, and **exit-method**
+    breakdown (maker_exit / taker_max_hold / taker_stop / taker_reversal).
+
+Realized metrics come from each arm's durable CSV logs, so the dashboard works even
+when the trader is stopped (reviewing after close). Live panels (positions,
 unrealized, feed, breaker) populate only while the trader is running; otherwise the
 status pill shows `OFFLINE`.
 

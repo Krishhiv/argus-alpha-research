@@ -12,7 +12,10 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+from paper_trader.config import LOGS_DIR
+
 IST = timezone(timedelta(hours=5, minutes=30))
+ARMS_BASE = f"{LOGS_DIR}/arms"
 
 
 def today_ist() -> str:
@@ -98,4 +101,43 @@ def realized_metrics(rows: list[dict], date: str) -> dict[str, Any]:
         "per_instrument": per_instrument,
         "exit_breakdown": exit_breakdown,
         "equity_curve":   equity_curve,
+    }
+
+
+# ── Multi-arm helpers ─────────────────────────────────────────────────────────
+
+def discover_arms(arms_base: str | None = None) -> list[str]:
+    """Names of arms that have a trade log under <arms_base>/<name>/."""
+    base = Path(arms_base or ARMS_BASE)
+    if not base.exists():
+        return []
+    return sorted(
+        d.name for d in base.iterdir()
+        if d.is_dir() and (d / "paper_trades.csv").exists()
+    )
+
+
+def arm_trades_path(name: str, arms_base: str | None = None) -> Path:
+    return Path(arms_base or ARMS_BASE) / name / "paper_trades.csv"
+
+
+def realized_for_arms(date: str, arms_base: str | None = None) -> dict[str, dict]:
+    """{arm_name: realized_metrics(...)} for the given IST date."""
+    return {
+        name: realized_metrics(read_trades(arm_trades_path(name, arms_base)), date)
+        for name in discover_arms(arms_base)
+    }
+
+
+def cumulative_for_arm(name: str, arms_base: str | None = None) -> dict[str, Any]:
+    """All-time net per arm, broken down by trading date (for the daily email)."""
+    rows = read_trades(arm_trades_path(name, arms_base))
+    by_date: dict[str, float] = {}
+    for r in rows:
+        by_date[r.get("date", "")] = by_date.get(r.get("date", ""), 0.0) + _f(r, "net_pnl")
+    return {
+        "total_net": round(sum(by_date.values()), 2),
+        "n_days":    len([d for d in by_date if d]),
+        "n_trades":  len(rows),
+        "by_date":   {d: round(v, 2) for d, v in sorted(by_date.items()) if d},
     }

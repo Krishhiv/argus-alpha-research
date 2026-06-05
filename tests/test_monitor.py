@@ -98,42 +98,77 @@ class TestSnapshot:
         assert loaded["totals"]["unrealized_pnl"] == pytest.approx(700.0)
 
 
-# ── payload merge ───────────────────────────────────────────────────────────
+# ── multi-arm metrics + payload merge ────────────────────────────────────────
+
+import paper_trader.monitor.metrics as M
+from paper_trader.monitor.metrics import discover_arms, realized_for_arms, cumulative_for_arm
+
+_HDR = "underlying,date,net_pnl,gross_pnl,fee,exit_method,exit_ts\n"
+
+
+def _make_arms(base: Path, date: str):
+    """Two arms with today's trades under base/<arm>/paper_trades.csv."""
+    (base / "control").mkdir(parents=True)
+    (base / "control" / "paper_trades.csv").write_text(
+        _HDR + f"ICICIBANK,{date},100,120,20,maker_exit,{date}T04:00:01\n"
+             + f"RELIANCE,{date},-40,-20,20,taker_stop,{date}T04:00:02\n")
+    (base / "no_stop").mkdir(parents=True)
+    (base / "no_stop" / "paper_trades.csv").write_text(
+        _HDR + f"RELIANCE,{date},80,100,20,maker_exit,{date}T04:00:01\n")
+
+
+class TestMultiArmMetrics:
+    def test_discover_and_realized(self, tmp_path: Path):
+        d = today_ist()
+        _make_arms(tmp_path, d)
+        assert discover_arms(str(tmp_path)) == ["control", "no_stop"]
+        r = realized_for_arms(d, str(tmp_path))
+        assert r["control"]["net_pnl"] == 60.0 and r["control"]["n_trades"] == 2
+        assert r["no_stop"]["net_pnl"] == 80.0
+
+    def test_cumulative(self, tmp_path: Path):
+        d = today_ist()
+        _make_arms(tmp_path, d)
+        c = cumulative_for_arm("control", str(tmp_path))
+        assert c["total_net"] == 60.0 and c["n_trades"] == 2 and c["n_days"] == 1
+
 
 class TestBuildPayload:
-    def _write_csv(self, path: Path, date: str):
-        header = "underlying,date,net_pnl,gross_pnl,fee,exit_method,exit_ts\n"
-        rows = (f"ICICIBANK,{date},100,120,20,maker_exit,{date}T04:00:01\n"
-                f"RELIANCE,{date},-40,-20,20,taker_stop,{date}T04:00:02\n")
-        path.write_text(header + rows)
-
-    def test_realized_from_csv_when_no_live(self, tmp_path: Path):
-        csv = tmp_path / "trades.csv"
-        self._write_csv(csv, today_ist())
-        payload = build_payload(csv, tmp_path / "absent.json")
-        assert payload["live_online"] is False
-        assert payload["live"] is None
-        assert payload["realized"]["n_trades"] == 2
-        assert payload["realized"]["net_pnl"] == 60.0
-
-    def test_live_online_when_snapshot_fresh(self, tmp_path: Path):
-        csv = tmp_path / "trades.csv"
-        self._write_csv(csv, today_ist())
+    def test_multi_arm_merge_online(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(M, "ARMS_BASE", str(tmp_path / "arms"))
+        d = today_ist()
+        _make_arms(tmp_path / "arms", d)
         tele = tmp_path / "telemetry.json"
-        snap = {"generated_at": datetime.now(UTC).isoformat(),
-                "totals": {"unrealized_pnl": 50.0, "open_positions": 1, "n_posts": 5, "n_fills": 2},
-                "risk": {"halted": False, "day_net_pnl": 60.0, "loss_limit": -20000.0},
-                "feed": {"last_packet_age_sec": 0.4}, "brokers": {}}
-        tele.write_text(json.dumps(snap))
-        payload = build_payload(csv, tele)
+        tele.write_text(json.dumps({
+            "generated_at": datetime.now(UTC).isoformat(),
+            "arms": {"control": {
+                "totals": {"unrealized_pnl": 50.0, "open_positions": 1, "n_posts": 20, "n_fills": 2},
+                "risk": {"halted": False, "day_net_pnl": 100.0, "loss_limit": -20000.0},
+                "feed": {"last_packet_age_sec": 0.3}, "brokers": {},
+                "note": "baseline", "universe": ["ICICIBANK", "RELIANCE"]}}}))
+        payload = build_payload(tele)
         assert payload["live_online"] is True
-        assert payload["live"]["totals"]["unrealized_pnl"] == 50.0
+        assert set(payload["arms"]) == {"control", "no_stop"}
+        assert payload["arms"]["control"]["realized"]["net_pnl"] == 60.0
+        assert payload["arms"]["control"]["live"]["totals"]["unrealized_pnl"] == 50.0
+        assert payload["arms"]["control"]["note"] == "baseline"
+        assert payload["arms"]["no_stop"]["live"] is None   # no live snapshot for that arm
 
-    def test_live_offline_when_snapshot_stale(self, tmp_path: Path):
-        csv = tmp_path / "trades.csv"
-        self._write_csv(csv, today_ist())
+    def test_offline_still_shows_realized(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(M, "ARMS_BASE", str(tmp_path / "arms"))
+        d = today_ist()
+        _make_arms(tmp_path / "arms", d)
         tele = tmp_path / "telemetry.json"
         old = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-        tele.write_text(json.dumps({"generated_at": old, "totals": {}, "risk": {}, "feed": {}, "brokers": {}}))
-        payload = build_payload(csv, tele)
+        tele.write_text(json.dumps({"generated_at": old, "arms": {}}))
+        payload = build_payload(tele)
         assert payload["live_online"] is False
+        assert payload["arms"]["control"]["realized"]["net_pnl"] == 60.0
+
+    def test_missing_telemetry_file(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(M, "ARMS_BASE", str(tmp_path / "arms"))
+        d = today_ist()
+        _make_arms(tmp_path / "arms", d)
+        payload = build_payload(tmp_path / "absent.json")
+        assert payload["live_online"] is False
+        assert "control" in payload["arms"]

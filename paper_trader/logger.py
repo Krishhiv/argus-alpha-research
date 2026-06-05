@@ -53,34 +53,59 @@ def _append(path: str, fields: list[str], row: dict) -> None:
         w.writerow({k: row.get(k, "") for k in fields})
 
 
-def log_trade(row: dict) -> None:
-    _append(TRADES_LOG, TRADE_FIELDS, row)
+class TradeLogger:
+    """
+    Writes trades / orders / pnl CSVs to a given set of paths. Each parallel arm
+    gets its own TradeLogger (its own directory), so arms never mix in one file.
+    """
 
+    def __init__(self, trades_path: str, orders_path: str, pnl_path: str) -> None:
+        self.trades_path = trades_path
+        self.orders_path = orders_path
+        self.pnl_path    = pnl_path
 
-def log_order_event(underlying: str, event: str, side: int,
+    @classmethod
+    def for_dir(cls, logs_dir: str) -> "TradeLogger":
+        return cls(f"{logs_dir}/paper_trades.csv",
+                   f"{logs_dir}/paper_orders.csv",
+                   f"{logs_dir}/paper_pnl.csv")
+
+    def trade(self, row: dict) -> None:
+        _append(self.trades_path, TRADE_FIELDS, row)
+
+    def order_event(self, underlying: str, event: str, side: int,
                     price: float, qty: float,
                     fill_layer: str = "", notes: str = "") -> None:
-    _append(ORDERS_LOG, ORDER_FIELDS, {
-        "ts":         datetime.now(timezone.utc).isoformat(),
-        "underlying": underlying,
-        "event":      event,
-        "side":       side,
-        "price":      price,
-        "qty":        qty,
-        "fill_layer": fill_layer,
-        "notes":      notes,
-    })
+        _append(self.orders_path, ORDER_FIELDS, {
+            "ts":         datetime.now(timezone.utc).isoformat(),
+            "underlying": underlying, "event": event, "side": side,
+            "price": price, "qty": qty, "fill_layer": fill_layer, "notes": notes,
+        })
+
+    def pnl_snapshot(self, underlying: str, date: str, cum_net_pnl: float,
+                     n_trades: int, n_posts: int, n_fills: int) -> None:
+        _append(self.pnl_path, PNL_FIELDS, {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "underlying": underlying, "date": date,
+            "cumulative_net_pnl": round(cum_net_pnl, 2),
+            "n_trades": n_trades, "n_posts": n_posts, "n_fills": n_fills,
+        })
 
 
-def log_pnl_snapshot(underlying: str, date: str,
-                     cum_net_pnl: float, n_trades: int,
-                     n_posts: int, n_fills: int) -> None:
-    _append(PNL_LOG, PNL_FIELDS, {
-        "ts":                datetime.now(timezone.utc).isoformat(),
-        "underlying":        underlying,
-        "date":              date,
-        "cumulative_net_pnl": round(cum_net_pnl, 2),
-        "n_trades":          n_trades,
-        "n_posts":           n_posts,
-        "n_fills":           n_fills,
-    })
+# Default logger → original top-level paths. Used by the single-arm path, tests,
+# report.py and the monitor for backward compatibility.
+default_logger = TradeLogger(TRADES_LOG, ORDERS_LOG, PNL_LOG)
+
+
+def log_trade(row: dict) -> None:
+    default_logger.trade(row)
+
+
+def log_order_event(underlying: str, event: str, side: int, price: float,
+                    qty: float, fill_layer: str = "", notes: str = "") -> None:
+    default_logger.order_event(underlying, event, side, price, qty, fill_layer, notes)
+
+
+def log_pnl_snapshot(underlying: str, date: str, cum_net_pnl: float,
+                     n_trades: int, n_posts: int, n_fills: int) -> None:
+    default_logger.pnl_snapshot(underlying, date, cum_net_pnl, n_trades, n_posts, n_fills)

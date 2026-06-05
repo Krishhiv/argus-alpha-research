@@ -28,6 +28,15 @@ class _Row:
     segment: str
     instrument: str
     expiry_date: date
+    lot_size: int
+
+
+@dataclass(frozen=True)
+class ResolvedContract:
+    underlying: str
+    security_id: int
+    lot_size: int
+    expiry_date: date
 
 
 def _load_master(path: Path) -> list[_Row]:
@@ -42,23 +51,24 @@ def _load_master(path: Path) -> list[_Row]:
                     segment=str(raw["SEGMENT"]).strip().upper(),
                     instrument=str(raw["INSTRUMENT"]).strip().upper(),
                     expiry_date=date.fromisoformat(str(raw["SM_EXPIRY_DATE"]).strip()),
+                    lot_size=int(float(raw.get("LOT_SIZE", 0) or 0)),
                 ))
             except (KeyError, ValueError):
                 continue
     return rows
 
 
-def resolve_security_ids(
+def resolve_contracts(
     underlying_symbols: list[str],
     *,
     instrument: str = "FUTSTK",
     exchange: str = "NSE",
     segment: str = "D",
     as_of: date | None = None,
-) -> dict[str, int]:
+) -> dict[str, ResolvedContract]:
     """
-    Return {underlying_symbol: security_id} for the current front-month
-    futures contract of each requested symbol.
+    Return {underlying_symbol: ResolvedContract} (security_id + lot_size +
+    expiry) for the current front-month futures contract of each symbol.
 
     Reads INSTRUMENT_MASTER_PATH from the environment (the same .env the
     collector uses). Raises ValueError if any symbol cannot be resolved.
@@ -71,7 +81,7 @@ def resolve_security_ids(
     as_of_date = as_of or date.today()
     rows = _load_master(master_path)
 
-    result: dict[str, int] = {}
+    result: dict[str, ResolvedContract] = {}
     for sym in underlying_symbols:
         candidates = sorted(
             [
@@ -89,11 +99,25 @@ def resolve_security_ids(
                 f"No active {exchange}/{instrument} contract for {sym} as of {as_of_date}. "
                 f"Check that {master_path} is up to date."
             )
-        selected = candidates[0]  # nearest (current) expiry
-        result[sym] = selected.security_id
-        log.info(
-            "Resolved %s → security_id=%d (expiry=%s)",
-            sym, selected.security_id, selected.expiry_date,
-        )
+        s = candidates[0]  # nearest (current) expiry
+        result[sym] = ResolvedContract(sym.upper(), s.security_id, s.lot_size, s.expiry_date)
+        log.info("Resolved %s → security_id=%d lot=%d (expiry=%s)",
+                 sym, s.security_id, s.lot_size, s.expiry_date)
 
     return result
+
+
+def resolve_security_ids(
+    underlying_symbols: list[str],
+    *,
+    instrument: str = "FUTSTK",
+    exchange: str = "NSE",
+    segment: str = "D",
+    as_of: date | None = None,
+) -> dict[str, int]:
+    """Back-compat helper: {symbol: security_id} only."""
+    contracts = resolve_contracts(
+        underlying_symbols, instrument=instrument, exchange=exchange,
+        segment=segment, as_of=as_of,
+    )
+    return {sym: c.security_id for sym, c in contracts.items()}
