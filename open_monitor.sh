@@ -53,8 +53,16 @@ else
 fi
 
 # 2. Open the SSH tunnel (background).
+#    -C (compression) is the key fix: ICMP is blocked to the VPS, so Path-MTU
+#    Discovery is broken and large uncompressed responses (the dashboard payload)
+#    get their oversized packets silently dropped → the tunnel stalls and times
+#    out. Compression keeps packets small and dodges the MTU problem entirely.
+#    Keepalive options additionally guard against idle drops.
 echo "• tunnel  localhost:${PORT}  →  ${VPS_HOST}:127.0.0.1:${PORT}"
-ssh -N -L "${PORT}:127.0.0.1:${PORT}" "$VPS_HOST" &
+ssh -N -C \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+    -o ExitOnForwardFailure=yes -o TCPKeepAlive=yes \
+    -L "${PORT}:127.0.0.1:${PORT}" "$VPS_HOST" &
 tunnel_pid=$!
 
 # 3. Wait for the dashboard to answer through the tunnel.

@@ -40,6 +40,21 @@ logger = logging.getLogger("argus.monitor")
 
 _STATIC_DIR = Path(__file__).resolve().parent / "dashboard"
 _LIVE_STALE_SEC = 15.0   # snapshot older than this → trader considered offline
+_MAX_EQUITY_PTS = 240    # downsample equity curves for the wire (charts don't need more)
+
+
+def _downsample(curve: list, max_pts: int = _MAX_EQUITY_PTS) -> list:
+    """Evenly thin an equity curve to <= max_pts, always keeping the last point.
+    Keeps the dashboard payload small — a full per-trade curve (700+ pts × 7 arms)
+    bloats the response to ~145KB, which stalls the tunnel on a broken-MTU path."""
+    n = len(curve)
+    if n <= max_pts:
+        return curve
+    step = n / max_pts
+    out = [curve[int(i * step)] for i in range(max_pts)]
+    if out[-1] is not curve[-1]:
+        out.append(curve[-1])
+    return out
 
 
 def build_payload(telemetry_path: Path) -> dict[str, Any]:
@@ -47,6 +62,9 @@ def build_payload(telemetry_path: Path) -> dict[str, Any]:
     now  = datetime.now(timezone.utc)
     date = today_ist()
     realized = realized_for_arms(date)            # {arm: realized_metrics}
+    for r in realized.values():                   # thin curves before they hit the wire
+        if r.get("equity_curve"):
+            r["equity_curve"] = _downsample(r["equity_curve"])
 
     live_arms: dict[str, Any] = {}
     live_online = False

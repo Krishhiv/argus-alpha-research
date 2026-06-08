@@ -172,3 +172,17 @@ class TestBuildPayload:
         payload = build_payload(tmp_path / "absent.json")
         assert payload["live_online"] is False
         assert "control" in payload["arms"]
+
+
+class TestDownsample:
+    def test_short_curve_unchanged(self):
+        from paper_trader.monitor.serve_monitor import _downsample
+        c = [{"t": i, "cum": i} for i in range(50)]
+        assert _downsample(c, 240) == c
+
+    def test_long_curve_thinned_keeps_last(self):
+        from paper_trader.monitor.serve_monitor import _downsample
+        c = [{"t": i, "cum": i} for i in range(1000)]
+        out = _downsample(c, 240)
+        assert len(out) <= 241
+        assert out[0] == c[0] and out[-1] == c[-1]   # endpoints preserved
