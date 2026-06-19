@@ -1,18 +1,36 @@
 # Argus Alpha Research
 
-Depth-feed-only alpha research and paper trading system for NSE equity futures. All signals are derived exclusively from the 20-level order book (depth feed).
+Depth-feed-only alpha research and paper-trading system for NSE equity futures. All signals are derived exclusively from the 20-level order book (depth feed). The live system runs a **multi-arm parallel paper-trading harness** — several strategy variants competing head-to-head on one shared feed (see [Multi-Arm Harness](#multi-arm-harness)).
+
+---
+
+## Project Phases
+
+| Phase | Status | What |
+|---|---|---|
+| 🏕️ **Basecamp** | **running** | 15-day multi-arm paper-trading data-gathering run (7 arms, one shared feed; config frozen) |
+| 🔭 **Basecamp Recon** | next | analyse & interpret Basecamp (overfitting-disciplined ranking, regime attribution), then improve/optimise — see [`BASECAMP_RECON.md`](BASECAMP_RECON.md) |
+| 🧗 **Expenture** | future | deploy the improved/v2 models and **paper-trade** them to validate |
+
+Real capital is a phase *beyond* Expenture — nothing touches real money until validated twice (Basecamp, then Expenture).
 
 ---
 
 ## Universe
 
-| Instrument | Lot Size | Live | Notes |
-|---|---|---|---|
-| ICICIBANK | 700 | ✅ | Strongest live alpha (62–64% win rate) |
-| RELIANCE | 500 | ✅ | Strong live alpha |
-| HDFCBANK | 550 | ✅ | Roughly break-even, high win rate — kept for diversification |
-| TCS | 175 | ⏸️ | **Suspended** — ~49% win rate, highest break-even (₹0.72/share), weakest signal |
-| BAJFINANCE | — | ❌ | **Excluded** — data quality too poor |
+The live **core** (3 names) is the proven champion universe; the `expanded` arm additionally tests 4 cross-sector **expansion candidates**. Lot sizes are resolved live from the instrument master.
+
+| Instrument | Lot Size | Role |
+|---|---|---|
+| ICICIBANK | 700 | **Core** — strongest live alpha |
+| RELIANCE | 500 | **Core** — strong live alpha |
+| HDFCBANK | 550 | **Core** — high win rate, ~break-even (diversifier) |
+| SBIN | 750 | Expansion candidate (bank) |
+| AXISBANK | 625 | Expansion candidate (bank) |
+| BHARTIARTL | 475 | Expansion candidate (telecom — cross-sector diversifier) |
+| ITC | 1600 | Expansion candidate (FMCG) — gate-suppressed, rarely trades (low price → spread can't clear fees) |
+| TCS | 175 | ⏸️ **Suspended** — ~49% win rate, highest break-even (₹0.72/share), weakest signal |
+| BAJFINANCE | — | ❌ **Excluded** — data quality too poor |
 
 ---
 
@@ -76,25 +94,35 @@ research/
     ic_analysis.ipynb         # IC/ICIR analysis across all instruments and dates
     signal_combination.ipynb  # composite signal construction
 paper_trader/
-  config.py                   # all strategy and runtime parameters
+  config.py                   # default strategy params + runtime config
   signal.py                   # microprice deviation computation
-  broker.py                   # per-instrument stateful order simulator
-  logger.py                   # append-only CSV event logger
-  report.py                   # daily P&L report emailer
-  main.py                     # asyncio entry point
-  feed_client.py              # Dhan depth + market websocket clients
-  dhan_parser.py              # Dhan binary packet parser (depth + market)
-  contracts.py                # front-month contract resolver (instrument master CSV)
-  logs/                       # paper_trades.csv, paper_orders.csv, paper_pnl.csv
-  systemd/                    # 7 systemd service and timer unit files
-  requirements.txt
-  DEPLOY.md
+  broker.py                   # PaperBroker (StrategyParams, DayRisk) — order simulator
+  arms.py                     # arm registry — the parallel strategy variants
+  harness.py                  # multi-arm runtime build + feed fan-out (pure, testable)
+  main.py                     # asyncio entry point — one feed → all arms
+  contracts.py                # front-month contract + lot-size resolver (instrument master)
+  feed_client.py              # Dhan depth websocket client
+  dhan_parser.py              # Dhan binary packet parser
+  logger.py                   # per-arm CSV event logger (TradeLogger)
+  telemetry.py                # live snapshot builder (for the monitor)
+  report.py                   # daily multi-arm comparison emailer
+  monitor/
+    serve_monitor.py          # stdlib HTTP server (/api/monitor + static UI)
+    metrics.py                # per-arm realized metrics from the CSVs
+    dashboard/                # terminal UI: index.html, app.js, styles.css
+  logs/arms/<arm>/            # per-arm paper_trades / paper_orders / paper_pnl CSVs
+  systemd/                    # 8 unit files (trader timers + always-on monitor)
+  MONITOR.md  DEPLOY.md  requirements.txt
 tests/
-  test_backtester.py          # 28 tests for backtesting engine
-  test_features.py            # smoke tests for feature library
-  test_maker_engine.py        # tests for maker strategy engine
-  test_paper_trader.py        # 54 tests for paper trader modules
+  test_backtester.py          # 28 — backtesting engine, cost model
+  test_features.py            # feature library smoke tests
+  test_maker_engine.py        # maker engine
+  test_paper_trader.py        # 58 — signal, broker, gate, stop, breaker, parser, contracts
+  test_monitor.py             # 14 — realized metrics, multi-arm payload merge
+  test_harness.py             # 10 — arm build, fan-out, per-arm isolation
+open_monitor.sh               # laptop launcher: tunnel + open the monitor (one command)
 run_oos_validation.py         # out-of-sample validation runner
+BASECAMP_RECON.md             # the Recon-phase analysis/research plan
 ```
 
 ---
@@ -146,6 +174,30 @@ Passive limit order strategy that earns the spread rather than paying it.
 
 **Robustness:** Zero-price / crossed-book packets (Dhan emits these at the 15:30 IST close) are dropped before any state update, so they cannot trigger spurious fills or corrupt the mid used by the EOD force-close. New entries also stop after `NO_NEW_ENTRY_IST = 15:25`.
 
+**Per-arm configuration:** the values above are the **champion defaults** (`StrategyParams` in `broker.py`). Each parallel arm overrides them — e.g. a different stop, hold, or edge margin — and the `reversal` arm sets `exit_mode="reversal"`, which exits at market the moment the microprice flips against the position (an alternative to the passive maker exit).
+
+---
+
+## Multi-Arm Harness
+
+The live system runs **several strategy variants ("arms") in parallel on one shared depth feed**, as independent risk-free simulations. Because the backtest is unreliable (compacted-data replay missed a live day by ₹11k), live champion-vs-challenger on *identical* data is the only trustworthy way to compare variants — and the harness is the platform for that (and for Recon/Expenture).
+
+**Architecture** (`harness.py` + `main.py`): one Dhan depth connection subscribes to the **union** of all arms' instruments (≤50/connection) and fans each packet out to every arm that trades that symbol. Each arm has its **own** `PaperBroker` set, its own `DayRisk` governor, and **namespaced CSV logs** under `logs/arms/<arm>/`, so arms never contaminate each other. One bad instrument can't crash the run (per-symbol resolution); telemetry can never kill the trader.
+
+**Basecamp arms** — each isolates one open question (all = champion params except where noted):
+
+| Arm | Variant | Question it tests |
+|---|---|---|
+| `control` | champion, 3 core names | the baseline everything is measured against |
+| `expanded` | + SBIN, AXISBANK, ITC, BHARTIARTL | does the edge generalize / diversify? |
+| `no_stop` | `STOP_LOSS_TICKS=0` | does the stop help or cut recoverable trades? |
+| `wide_stop` | `STOP_LOSS_TICKS=24` | is 12 ticks too tight? |
+| `no_icici` | drop ICICIBANK | is ICICIBANK a drag or a high-variance engine? |
+| `selective` | `EDGE_MARGIN=1.5` | do fewer, higher-conviction trades win? |
+| `reversal` | `exit_mode="reversal"` | does a signal-reversal exit beat the time/stop exit? |
+
+Arms are defined declaratively in `arms.py`. Results are ranked in Basecamp Recon with overfitting discipline (DSR / PBO / n_eff) before any arm is promoted — see [`BASECAMP_RECON.md`](BASECAMP_RECON.md).
+
 ---
 
 ## Fee Model (NSE Equity Futures, Dhan)
@@ -186,6 +238,8 @@ Run: `python run_oos_validation.py`
 > **Live recalibration (2026-05-30):** Queue fill filter added (qty_consumed ≥ 10% of queue_ahead) and minimum 10-packet hold before exit posting, to correct for live tick data being noisier than compacted backtester data.
 >
 > **Economic edge gate + EOD fix (2026-06-02):** Replaced the flat rupee threshold with a per-instrument economic edge gate (`spread/2 ≥ fee/share`), suspended TCS, reduced `max_hold` to 150, and fixed a critical bug where Dhan's zero-price close-of-session packets corrupted the EOD mid and produced ±₹400k phantom P&L. **Validation:** replaying real June 1–2 depth through the old vs new logic on identical data moved the 2-day net from **−₹12,594 → +₹14,834 (ex-TCS)** and eliminated the phantom trades. Caveat: compacted-data fills are optimistic; live results will be lower.
+>
+> **Risk tuning + multi-arm harness (2026-06-03 onward):** patient exit (`max_hold` 150 → 250), wide 12-tick disaster-stop, and a −₹20k catastrophe circuit breaker (a tight breaker would lock in the intraday troughs the strategy recovers from). Then the strategy was generalized into the **multi-arm harness** (7 parallel arms) so variants can be compared live on identical data — the trustworthy alternative to the unreliable replay. See [Multi-Arm Harness](#multi-arm-harness).
 
 Produces `trade_log_train.csv` and `trade_log_oos.csv` with 18 columns per trade (entry/exit timestamps, prices, methods, lot size, notional, hold duration, gross P&L, fee, net P&L).
 
@@ -213,14 +267,16 @@ A live paper trading environment that connects to Dhan's real-time feeds and sim
 
 ```
 main.py
-  ├── contracts.py       resolve current security_ids from instrument master CSV
-  ├── feed_client.py     depth feed asyncio task (depth-only; no market feed needed)
+  ├── contracts.py       resolve security_ids + lot sizes from instrument master
+  ├── feed_client.py     ONE depth feed (union of all arms' instruments)
   │     └── dhan_parser.py   binary packet parser
-  └── broker.py × N     one PaperBroker per live instrument (3: HDFCBANK, ICICIBANK, RELIANCE)
-        └── logger.py    append-only CSV writes (trades, orders, PnL snapshots)
+  └── harness.py         fan each packet out to every arm
+        └── arm × 7       each: own PaperBrokers + DayRisk + namespaced TradeLogger
+              └── logs/arms/<arm>/   per-arm trades / orders / PnL CSVs
+        └── telemetry.py  combined live snapshot → logs/paper_telemetry.json (1 Hz)
 ```
 
-On SIGTERM (sent by the stop timer at 15:35 IST), open positions are force-closed at the last known mid price before the process exits.
+On SIGTERM (sent by the stop timer at 15:35 IST), every arm's open positions are force-closed at the last known mid price before the process exits.
 
 ### Contract Resolution
 
@@ -230,21 +286,29 @@ On SIGTERM (sent by the stop timer at 15:35 IST), open positions are force-close
 
 Deployed on the same VPS as the data collector. The paper trader symlinks the collector's `.env` to reuse auth credentials and file paths.
 
-| Timer | UTC | IST | Purpose |
+| Timer / service | UTC | IST | Purpose |
 |---|---|---|---|
-| `argus-paper-trader-start` | 03:40 | 09:10 | Start process before market open |
+| `argus-paper-trader-start` | 03:40 | 09:10 | Start the multi-arm trader before market open |
 | `argus-paper-trader-stop` | 10:05 | 15:35 | Graceful stop after market close |
-| `argus-paper-trader-report` | 10:20 | 15:50 | Email daily P&L report |
+| `argus-paper-trader-report` | 10:20 | 15:50 | Email the daily multi-arm comparison |
+| `argus-monitor.service` | — | always-on | Serve the dashboard 24/7 (`Restart=always`, survives reboot) |
 
 The main service (`argus-paper-trader.service`) has `Restart=on-failure` — it recovers from mid-session crashes automatically. The stop timer sends SIGTERM, which triggers clean shutdown (not a failure restart).
 
 ### Daily Report
 
-`paper_trader/report.py` runs at 15:50 IST via systemd. It reads today's `paper_trades.csv`, computes trade-level statistics (n_trades, net P&L, win rate, avg net, exit method breakdown, per-instrument breakdown), and emails the report to the configured address via Gmail SMTP.
+`paper_trader/report.py` runs at 15:50 IST via systemd. It reads each arm's `logs/arms/<arm>/paper_trades.csv` and emails a **multi-arm comparison**: a leaderboard ranked by the day's net, plus per-arm per-instrument and exit-method breakdowns and a running cumulative. Recipient is hardcoded (not read from `.env`).
 
 ### Live Monitor
 
-A dependency-free terminal dashboard (`paper_trader/monitor/`) for watching the session in real time. The running trader writes an atomic live snapshot (`logs/paper_telemetry.json`, every 2 s); `serve_monitor.py` (Python stdlib `http.server`) merges it with the durable trade CSV and serves a `/api/monitor` endpoint plus a static UI (vanilla HTML/CSS/JS, hand-drawn canvas equity curve — no framework). Shows total/realized/unrealized P&L, win rate, fill rate, the day-risk gauge, intraday cumulative-P&L chart, open positions, and per-instrument + exit-method breakdowns. Binds `127.0.0.1` and is reached over an SSH tunnel — nothing is exposed publicly. See `paper_trader/MONITOR.md` for run instructions.
+A dependency-free terminal dashboard (`paper_trader/monitor/`) for watching all arms in real time. The running trader writes an atomic combined snapshot (`logs/paper_telemetry.json`, **1 Hz**); `serve_monitor.py` (Python stdlib `http.server`) merges it with the per-arm trade CSVs and serves `/api/monitor` plus a static UI (vanilla HTML/CSS/JS, hand-drawn canvas equity curve — no framework). The UI shows an **arm leaderboard** (ranked by total P&L) with **click-to-drill-in** detail per arm: total/realized/unrealized P&L, win rate, fill rate, day-risk gauge, intraday cumulative-P&L chart, open positions, and per-instrument + exit-method breakdowns.
+
+Runs **always-on** via `argus-monitor.service` (bound to `127.0.0.1`, no laptop needed). Two private access paths — nothing is ever exposed publicly:
+
+- **Laptop:** `./open_monitor.sh` — opens an SSH tunnel and the browser in one command.
+- **Phone (vacation/remote):** [Tailscale](https://tailscale.com) **Serve** exposes it over private HTTPS to your own devices only (`https://<host>.<tailnet>.ts.net`). *Serve*, never *Funnel*.
+
+Live data flows during market hours (09:10–15:35 IST); outside them the dashboard shows the day's final realized results with an `OFFLINE` pill. See `paper_trader/MONITOR.md`.
 
 ### Deployment
 
@@ -259,12 +323,15 @@ ln -s /home/ubuntu/collector-dhan/.env .env
 sudo cp paper_trader/systemd/*.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now argus-paper-trader-{start,stop,report}.timer
+sudo systemctl enable --now argus-monitor.service   # always-on dashboard
 
 # After pushing changes
 ssh lightsail-mumbai "cd /home/ubuntu/paper-trader && git pull"
 ```
 
-### Paper Trading Success Criteria (20-day evaluation)
+### Evaluation criteria (assessed per-arm in Basecamp Recon)
+
+Baseline targets per arm, applied *after* the overfitting gates (DSR ≥ 0.95, PBO ≤ 0.2):
 
 | Metric | Target |
 |---|---|
@@ -309,9 +376,11 @@ All features are vectorised (no row-by-row loops). Rolling windows are in **pack
 | `tests/test_backtester.py` | 28 | Backtesting engine, cost model |
 | `tests/test_features.py` | — | Feature library smoke tests |
 | `tests/test_maker_engine.py` | — | Maker engine |
-| `tests/test_paper_trader.py` | 54 | Signal math, broker state machine, economic gate, garbage-packet guard, session cutoff, binary parser, contract resolution |
+| `tests/test_paper_trader.py` | 58 | Signal, broker state machine, `StrategyParams`, economic gate, stop, circuit breaker, reversal exit, garbage-packet guard, session cutoff, parser, contracts |
+| `tests/test_monitor.py` | 14 | Realized metrics, multi-arm payload merge |
+| `tests/test_harness.py` | 10 | Arm build, universe pruning, fan-out, per-arm isolation |
 
-Run all tests:
+**141 tests passing.** Run all:
 ```bash
 python -m pytest tests/ -v
 ```
@@ -320,18 +389,22 @@ python -m pytest tests/ -v
 
 ## Status
 
-- [x] Data sync pipeline
-- [x] Data loader with quality guard
-- [x] Feature library A1–A6
-- [x] IC/ICIR analysis (A6 + microprice are primary signals)
-- [x] Maker strategy backtester with NSE cost model
-- [x] Walk-forward validation with per-instrument lot sizes
-- [x] OOS validation (train: 15 days, test: 5 days)
-- [x] Trade log CSV export
-- [x] Paper trader — full environment (broker, logger, report, systemd)
-- [x] Paper trader — Dhan websocket connections (depth + market feed)
-- [x] Paper trader — auto contract resolution from instrument master
-- [x] Paper trader — 54 unit tests (54/54 passing)
-- [ ] Deploy paper trader to VPS
-- [ ] 20-day live paper trading run
-- [ ] Evaluate against success criteria → decision on Phase 2 (live capital)
+**Research & backtest**
+- [x] Data sync pipeline, loader with quality guard
+- [x] Feature library A1–A6 + IC/ICIR analysis (A6 + microprice primary)
+- [x] Maker backtester (NSE cost model), walk-forward + OOS validation
+
+**Paper trader (live on VPS)**
+- [x] Depth-only fill model (market feed dropped — one connection/account limit)
+- [x] Microprice signal + economic edge gate + queue filter
+- [x] Wide disaster-stop, patient exit, daily circuit breaker, EOD zero-price fix
+- [x] Auto contract + lot-size resolution from the instrument master
+- [x] **Multi-arm harness** — 7 arms, one shared feed, per-arm logging & risk
+- [x] **Live monitor v2** — multi-arm leaderboard, always-on service, phone access via Tailscale
+- [x] Deployed & running on the VPS; **141 tests passing**
+
+**Phases**
+- [~] 🏕️ **Phase Basecamp** — 15-day multi-arm run *(in progress)*
+- [ ] 🔭 **Phase Basecamp Recon** — overfitting-disciplined analysis + regime research + improve (see `BASECAMP_RECON.md`)
+- [ ] 🧗 **Phase Expenture** — paper-trade the improved/v2 models
+- [ ] Real-capital decision (only after Expenture validates)
