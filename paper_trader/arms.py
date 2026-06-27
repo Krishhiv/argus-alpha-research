@@ -56,6 +56,36 @@ ARMS: list[Arm] = [
 ]
 
 
+# ── Expenture I arms ──────────────────────────────────────────────────────────
+#
+# Recon I verdicts, turned into the go-forward race (see RECON_I_FINDINGS.md):
+#   • kill the reversal exit        — worse by −₹6.5k/day, P(>0)=0   [A6]
+#   • widen the stop 12 → 24 ticks  — wide_stop beat control P=0.99  [A2]
+#   • drop HDFCBANK                  — the lone core-name laggard     [A3/C]
+#   • measure the live fill haircut  — queue-aware exit fills         [Tier E]
+#
+# control + expanded run UNCHANGED for continuity: they keep banking days
+# comparable to Basecamp's 12 to close expanded's DSR power gap (0.93 → 0.95).
+# The v2 arms layer the config wins; the _q arms add realistic queue-aware exit
+# fills to quantify how much of expanded_v2's edge survives non-optimistic fills
+# (the binding constraint: breakeven p* ≈ 67% vs the touch-fill sim's 76%).
+
+CHAMPION_V2: StrategyParams = replace(CHAMPION, stop_loss_ticks=24)
+V2_UNIVERSE: list[str] = [s for s in EXPANDED_UNIVERSE if s != "HDFCBANK"]
+
+EXPENTURE_ARMS: list[Arm] = [
+    Arm("control",        BASE_UNIVERSE,     CHAMPION,    "Basecamp baseline (continuity)"),
+    Arm("expanded",       EXPANDED_UNIVERSE, CHAMPION,    "Basecamp champion (continuity for DSR gap)"),
+    Arm("expanded_v2",    V2_UNIVERSE,       CHAMPION_V2, "v2: stop 24, drop HDFC, no reversal"),
+    Arm("expanded_v2_q",  V2_UNIVERSE,
+        replace(CHAMPION_V2, queue_exit_fill=True, queue_exit_min_frac=1.0),
+        "v2 + queue-aware exit fills (full queue must clear)"),
+    Arm("expanded_v2_q50", V2_UNIVERSE,
+        replace(CHAMPION_V2, queue_exit_fill=True, queue_exit_min_frac=0.5),
+        "v2 + queue-aware exit fills (half queue)"),
+]
+
+
 def all_universe_symbols(arms: list[Arm] = ARMS) -> list[str]:
     """Union of every arm's instruments — what the single shared feed subscribes to."""
     seen: list[str] = []

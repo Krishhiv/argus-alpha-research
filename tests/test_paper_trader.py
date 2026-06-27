@@ -427,6 +427,87 @@ class TestStrategyParams:
         assert p.stop_loss_ticks == STOP_LOSS_TICKS and p.max_hold_packets == MAX_HOLD_PACKETS
 
 
+# ── Broker — queue-aware EXIT fill (Expenture I realistic fills) ───────────────
+
+class TestBrokerQueueExitFill:
+    def _open_long(self, params: StrategyParams) -> PaperBroker:
+        br = PaperBroker("HDFCBANK", params=params)
+        _depth(br, *_BUY)                          # post long @ 100.0
+        _depth(br, 99.5, 500, 101.0, 10)           # fill long @ 100.0
+        assert br.n_fills == 1
+        return br
+
+    def _post_exit_at_102(self, br: PaperBroker) -> None:
+        # hold past MIN_HOLD_PKTS so the passive exit posts at ask=102.0 with
+        # queue_ahead=1000; price favourable so the stop never fires.
+        for _ in range(MIN_HOLD_PKTS):
+            _depth(br, 100.0, 500, 102.0, 1000)
+        assert br._pending_exit is not None and br._pending_exit.queue_ahead == 1000
+
+    def test_default_off_fills_on_touch_without_queue(self):
+        # Basecamp model: queue_exit_fill=False → touch fills even with no volume
+        br = self._open_long(StrategyParams())     # default: queue_exit_fill False
+        self._post_exit_at_102(br)
+        _depth(br, 100.0, 500, 102.1, 1000)        # touch, zero qty consumed
+        assert br.trades[0]["exit_method"] == "maker_exit"
+
+    def test_queue_exit_blocks_touch_until_cleared(self):
+        # Realistic model: touch alone does NOT fill — queue must clear first
+        br = self._open_long(StrategyParams(queue_exit_fill=True, queue_exit_min_frac=1.0))
+        self._post_exit_at_102(br)
+        for _ in range(MAX_HOLD_PACKETS + 1):
+            _depth(br, 100.0, 500, 102.1, 1000)    # touch, but ask_qty never drops
+        assert br._position_side == 0
+        assert br.trades[0]["exit_method"] == "taker_max_hold"   # fell to taker
+
+    def test_queue_exit_fills_when_full_queue_clears(self):
+        br = self._open_long(StrategyParams(queue_exit_fill=True, queue_exit_min_frac=1.0))
+        self._post_exit_at_102(br)
+        _depth(br, 100.0, 500, 102.1, 0)           # ask_qty 1000→0: consumed 1000 ≥ 1000
+        assert br._position_side == 0
+        assert br.trades[0]["exit_method"] == "maker_exit"
+
+    def test_queue_exit_half_frac_fills_on_half_clear(self):
+        br = self._open_long(StrategyParams(queue_exit_fill=True, queue_exit_min_frac=0.5))
+        self._post_exit_at_102(br)
+        _depth(br, 100.0, 500, 102.1, 500)         # consumed 500 ≥ 0.5×1000
+        assert br.trades[0]["exit_method"] == "maker_exit"
+
+    def test_queue_ahead_recorded_in_trade(self):
+        br = self._open_long(StrategyParams())
+        self._post_exit_at_102(br)
+        _depth(br, 100.0, 500, 102.1, 800)         # ask 1000→800, consumed 200
+        t = br.trades[0]
+        assert t["queue_ahead"] == 1000
+        assert t["qty_consumed"] == 200
+
+
+# ── Broker — entry signal-context logging (Expenture I observability) ──────────
+
+class TestBrokerEntryContext:
+    def test_entry_context_captured_in_trade(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY)                          # post: dev>0, spread 1.0 (101−100)
+        _depth(br, 99.5, 500, 101.0, 10)           # fill long @ 100.0
+        for _ in range(MIN_HOLD_PKTS):
+            _depth(br, 100.0, 500, 102.0, 500)
+        _depth(br, 100.0, 500, 102.1, 500)         # maker exit
+        t = br.trades[0]
+        assert t["entry_sig"] > 0                  # bid-heavy book → +dev captured
+        assert t["entry_spread"] == pytest.approx(1.0)   # ask−bid at entry post
+        assert t["edge_ratio"] > 0                 # half-spread cleared fee with margin
+
+    def test_taker_exit_has_blank_queue_but_keeps_context(self):
+        br = PaperBroker("HDFCBANK")
+        _depth(br, *_BUY)
+        _depth(br, 99.5, 500, 101.0, 10)           # fill long
+        _depth(br, 99.0, 500, 99.2, 500)           # 18-tick adverse → taker_stop
+        t = br.trades[0]
+        assert t["exit_method"] == "taker_stop"
+        assert t["queue_ahead"] == ""              # no maker exit order existed
+        assert t["entry_sig"] > 0                  # entry context still present
+
+
 # ── Risk — daily loss circuit breaker ─────────────────────────────────────────
 
 class TestDayRiskCircuitBreaker:
@@ -591,7 +672,7 @@ class TestContracts:
                 resolve_security_ids(["TCS"])
 
     def test_multiple_symbols(self, tmp_path: Path):
-        expiry   = "2026-06-26"
+        expiry   = (datetime.now(UTC).date() + timedelta(days=30)).isoformat()
         csv_file = tmp_path / "master.csv"
         csv_file.write_text(
             _CSV_HEADER

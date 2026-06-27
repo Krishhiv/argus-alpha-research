@@ -97,6 +97,15 @@ class StrategyParams:
     no_new_entry_ist:    str   = NO_NEW_ENTRY_IST
     exit_mode:           str   = "maker"   # "maker" | "reversal"
 
+    # Queue-aware EXIT fill (Expenture I — realistic fill model). When False
+    # (default, = the Basecamp touch-fill model) a maker exit fills the instant
+    # price touches the posted level. When True, the exit fills only once enough
+    # volume has actually traded through our level to clear the queue ahead of us
+    # — i.e. we wait our turn in FIFO. Exits that never clear fall through to the
+    # taker fallback, which is exactly the live haircut we need to measure.
+    queue_exit_fill:     bool  = False
+    queue_exit_min_frac: float = 1.0    # fraction of exit queue_ahead that must trade
+
 
 # NSE futures fee schedule (Dhan)
 _BROKERAGE_PER_ORDER  = 20.0
@@ -132,6 +141,11 @@ class _Order:
     queue_ahead:   float    # bid_qty_01 at time of post (proxy for queue depth)
     qty_consumed:  float = 0.0   # cumulative L1 qty drop since post
     role:          str = "entry"  # 'entry' or 'exit'
+    # signal context at post time (observability — fed to the regime/condition
+    # analysis; BASECAMP_RECON §1). Captured for the entry order only.
+    sig:           float = 0.0   # micro_deviation at entry decision
+    half_spread:   float = 0.0   # (ask − bid)/2 at entry
+    edge_ratio:    float = 0.0   # half_spread / per-share breakeven fee
 
 
 class PaperBroker:
@@ -163,6 +177,10 @@ class PaperBroker:
         self._entry_price      = 0.0
         self._entry_packet     = 0
         self._entry_ts: Optional[datetime] = None
+        # entry signal context (copied from the entry order on fill; logged at close)
+        self._entry_sig        = 0.0
+        self._entry_half_spread = 0.0
+        self._entry_edge_ratio = 0.0
 
         self._prev_abs_sig     = 0.0
         self._last_exit_packet = -(self.p.order_timeout_pkts + 1)
@@ -241,13 +259,18 @@ class PaperBroker:
         sig = compute_micro_deviation(bid_price, bid_qty, ask_price, ask_qty)
         self._trading_date = ts_utc.astimezone(IST).strftime("%Y-%m-%d")
 
-        # Track qty consumed on the order's side (bid for BUY, ask for SELL)
-        if not math.isnan(self._prev_bid_qty) and self._pending_entry is not None:
-            if self._pending_entry.side > 0:
-                drop = max(0.0, self._prev_bid_qty - bid_qty)
-            else:
-                drop = max(0.0, self._prev_ask_qty - ask_qty)
-            self._pending_entry.qty_consumed += drop
+        # Track qty consumed on each pending order's side (bid for a BUY-side
+        # rest, ask for a SELL-side rest). At most one of entry/exit is pending at
+        # any time, but we update whichever exists. The exit tracking is what
+        # powers the queue-aware exit fill (Expenture I).
+        if not math.isnan(self._prev_bid_qty):
+            for o in (self._pending_entry, self._pending_exit):
+                if o is None:
+                    continue
+                if o.side > 0:
+                    o.qty_consumed += max(0.0, self._prev_bid_qty - bid_qty)
+                else:
+                    o.qty_consumed += max(0.0, self._prev_ask_qty - ask_qty)
         self._prev_bid_qty = bid_qty
         self._prev_ask_qty = ask_qty
 
@@ -275,6 +298,8 @@ class PaperBroker:
                     side=side, price=post_price,
                     post_packet=i, post_ts=ts_utc,
                     queue_ahead=bid_qty if side > 0 else ask_qty,
+                    sig=sig, half_spread=half_spread,
+                    edge_ratio=(half_spread / breakeven_sh) if breakeven_sh > 0 else 0.0,
                 )
                 self.n_posts += 1
                 self._logger.order_event(self.underlying, "post", side, post_price, self.lot_size * self.p.n_lots)
@@ -296,6 +321,9 @@ class PaperBroker:
                 self._entry_price   = o.price
                 self._entry_packet  = i
                 self._entry_ts      = ts_utc
+                self._entry_sig         = o.sig
+                self._entry_half_spread = o.half_spread
+                self._entry_edge_ratio  = o.edge_ratio
                 self._pending_entry = None
                 self.n_fills       += 1
                 self._logger.order_event(self.underlying, "fill_confirmed", o.side,
@@ -345,7 +373,15 @@ class PaperBroker:
                         (ex.side < 0 and ask_price > ex.price) or
                         (ex.side > 0 and bid_price < ex.price)
                     )
-                    if exit_candidate:
+                    # Queue-aware exit (Expenture I): when enabled, the passive
+                    # exit fills only once enough volume has cleared the queue
+                    # ahead of us. Default-off → instantaneous touch fill (Basecamp).
+                    exit_queue_ok = (
+                        not self.p.queue_exit_fill
+                        or ex.queue_ahead <= 0
+                        or ex.qty_consumed >= self.p.queue_exit_min_frac * ex.queue_ahead
+                    )
+                    if exit_candidate and exit_queue_ok:
                         self._close_position(ex.price, "maker_exit", i, ts_utc, mid)
                     elif packets_held >= self.p.max_hold_packets:
                         taker_price = mid + (-self._position_side) * self.p.tick_size
@@ -387,6 +423,7 @@ class PaperBroker:
                                  self.lot_size, self.p.n_lots, self._position_side)
         net       = round(gross - fee, 2)
         hold_pkts = exit_packet - self._entry_packet
+        ex        = self._pending_exit   # present for maker_exit; None for taker exits
 
         trade = {
             "underlying":   self.underlying,
@@ -407,8 +444,11 @@ class PaperBroker:
             "gross_pnl":    round(gross, 2),
             "fee":          fee,
             "net_pnl":      net,
-            "queue_ahead":  "",
-            "qty_consumed": "",
+            "queue_ahead":  round(ex.queue_ahead, 1) if ex else "",
+            "qty_consumed": round(ex.qty_consumed, 1) if ex else "",
+            "entry_sig":      round(self._entry_sig, 4),
+            "entry_spread":   round(self._entry_half_spread * 2.0, 4),
+            "edge_ratio":     round(self._entry_edge_ratio, 3),
         }
         self.trades.append(trade)
         self.cum_net_pnl    += net

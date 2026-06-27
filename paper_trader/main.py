@@ -20,7 +20,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from paper_trader.arms import all_universe_symbols
+from paper_trader.arms import all_universe_symbols, EXPENTURE_ARMS
 from paper_trader.config import TELEMETRY_PATH, TELEMETRY_INTERVAL_SEC
 from paper_trader.feed_client import run_depth_feed
 from paper_trader.harness import resolve_available, build_runtimes, build_combined
@@ -49,14 +49,15 @@ def _load_auth() -> tuple[str, str]:
 async def async_main() -> None:
     access_token, client_id = _load_auth()
 
-    symbols   = all_universe_symbols()
+    arms      = EXPENTURE_ARMS               # Expenture I race (Recon I verdicts applied)
+    symbols   = all_universe_symbols(arms)
     contracts = resolve_available(symbols)
     if not contracts:
         raise RuntimeError("No instruments resolved — cannot start.")
     security_ids = {s: c.security_id for s, c in contracts.items()}
     log.info("Universe (%d resolved): %s", len(security_ids), security_ids)
 
-    runtimes = build_runtimes(contracts)
+    runtimes = build_runtimes(contracts, arms)
     log.info("Running %d arms: %s", len(runtimes), [rt.arm.name for rt in runtimes])
 
     stop_event = asyncio.Event()
