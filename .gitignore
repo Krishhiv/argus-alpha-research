@@ -64,3 +64,6 @@ PAPER_TRADING_PLAN.md
 STUDY_NOTES.md
 # Recon analysis data (synced from VPS)
 basecamp_recon/recon_data/
+
+# pairs/OU research artifacts (data panels, synced from VPS)
+research/pairs_ou/out/
