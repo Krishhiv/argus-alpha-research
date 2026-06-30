@@ -147,6 +147,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Backfill Dhan daily + 1m history.")
     ap.add_argument("--years", type=float, default=3.0)
     ap.add_argument("--no-intraday", action="store_true", help="daily only")
+    ap.add_argument("--intraday-only", action="store_true", help="skip daily (1m only)")
     ap.add_argument("--master", default=None, help="scrip-master CSV path (else env)")
     a = ap.parse_args()
 
@@ -156,7 +157,8 @@ def main() -> int:
     ids = resolve_equities(UNIVERSE, a.master)
     print(f"resolved {len(ids)}/{len(UNIVERSE)} equities; window {start.date()} → {end.date()}")
 
-    for kind, intraday in ([("daily", False)] + ([] if a.no_intraday else [("1m", True)])):
+    stages = ([] if a.intraday_only else [("daily", False)]) + ([] if a.no_intraday else [("1m", True)])
+    for kind, intraday in stages:
         d = OUT / kind
         d.mkdir(parents=True, exist_ok=True)
         for sym, sid in ids.items():
