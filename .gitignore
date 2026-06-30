@@ -1,5 +1,5 @@
-# Data — never commit raw tick data
-data/
+# Data — never commit raw tick data (root only; nested data/ dirs like alpha_lab/data are code)
+/data/
 
 # Python
 __pycache__/
