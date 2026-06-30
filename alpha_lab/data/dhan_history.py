@@ -56,21 +56,32 @@ def resolve_equities(symbols: list[str], master_path: str | None = None) -> dict
     if not master_path or not Path(master_path).expanduser().exists():
         raise FileNotFoundError("set INSTRUMENT_MASTER_PATH to the Dhan scrip master CSV")
     df = pd.read_csv(Path(master_path).expanduser(), low_memory=False)
-    cols = {c.lower(): c for c in df.columns}
-    def col(*opts):
+    U = {c.upper(): c for c in df.columns}
+    def col(*opts, required=True):
         for o in opts:
-            if o in cols:
-                return cols[o]
-        raise KeyError(f"none of {opts} in master columns {list(df.columns)[:8]}…")
-    sym_c = col("sem_trading_symbol", "sm_symbol_name", "symbol_name", "tradingsymbol")
-    seg_c = col("sem_segment", "sm_segment", "segment", "exchangesegment")
-    id_c  = col("sem_smst_security_id", "securityid", "security_id")
-    eq = df[df[seg_c].astype(str).str.upper().str.contains("E")]   # equity segment
+            if o in U:
+                return U[o]
+        if required:
+            raise KeyError(f"none of {opts} in master columns {list(df.columns)[:8]}…")
+        return None
+    # Dhan detailed scrip master: EXCH_ID / SEGMENT / INSTRUMENT / UNDERLYING_SYMBOL / SECURITY_ID.
+    # NSE cash equity = EXCH_ID 'NSE', SEGMENT 'E', INSTRUMENT 'EQUITY'; symbol in UNDERLYING_SYMBOL.
+    exch_c  = col("EXCH_ID", "SEM_EXM_EXCH_ID", "EXCHANGE", required=False)
+    seg_c   = col("SEGMENT", "SEM_SEGMENT")
+    instr_c = col("INSTRUMENT", "SEM_INSTRUMENT_NAME", required=False)
+    sym_c   = col("UNDERLYING_SYMBOL", "SEM_TRADING_SYMBOL", "SYMBOL_NAME", "TRADINGSYMBOL")
+    id_c    = col("SECURITY_ID", "SEM_SMST_SECURITY_ID", "SECURITYID")
+    eq = df
+    if exch_c:
+        eq = eq[eq[exch_c].astype(str).str.upper() == "NSE"]
+    eq = eq[eq[seg_c].astype(str).str.upper() == "E"]
+    if instr_c:
+        eq = eq[eq[instr_c].astype(str).str.upper() == "EQUITY"]
     out = {}
     for s in symbols:
         hit = eq[eq[sym_c].astype(str).str.upper() == s.upper()]
         if len(hit):
-            out[s] = str(hit.iloc[0][id_c])
+            out[s] = str(int(float(hit.iloc[0][id_c])))
     missing = set(symbols) - set(out)
     if missing:
         print(f"  ! unresolved equities (set manually): {sorted(missing)}")
