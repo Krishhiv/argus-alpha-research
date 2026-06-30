@@ -67,3 +67,6 @@ basecamp_recon/recon_data/
 
 # pairs/OU research artifacts (data panels, synced from VPS)
 research/pairs_ou/out/
+
+# alpha_lab stored history (pulled from Dhan, regenerable)
+alpha_lab/data/out/
