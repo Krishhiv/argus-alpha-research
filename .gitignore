@@ -70,3 +70,9 @@ research/pairs_ou/out/
 
 # alpha_lab stored history (pulled from Dhan, regenerable)
 alpha_lab/data/out/
+
+# LaTeX build artifacts (keep .tex, .pdf, figures)
+*.aux
+*.out
+*.toc
+*.synctex.gz
