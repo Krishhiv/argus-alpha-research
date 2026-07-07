@@ -1,5 +1,5 @@
 """
-One-shot terminal status — prints the multi-arm leaderboard + per-arm breakdown
+One-shot terminal status - prints the multi-arm leaderboard + per-arm breakdown
 and exits. Run via a single short SSH command (status.sh), which is reliable
 even when the live dashboard's sustained tunnel drops on a lossy route.
 
@@ -19,7 +19,7 @@ _LIVE_STALE_SEC = 15.0
 
 def _m(n) -> str:
     if n is None:
-        return "—"
+        return "-"
     return ("+" if n >= 0 else "−") + "₹" + format(abs(round(n)), ",")
 
 
@@ -49,15 +49,15 @@ def main() -> int:
         return r, u, r + u
 
     status = "LIVE" if online else "OFFLINE"
-    aget = f"{age:.0f}s" if age is not None else "—"
-    print(f"\nARGUS PAPER — MULTI-ARM — {date}   [{status}, telemetry {aget}]")
+    aget = f"{age:.0f}s" if age is not None else "-"
+    print(f"\nARGUS PAPER - MULTI-ARM - {date}   [{status}, telemetry {aget}]")
     print("=" * 70)
     print(f"  {'arm':<11}{'realized':>11}{'unreal':>9}{'TOTAL':>11}{'trades':>8}{'WR':>6}")
     for a in sorted(names, key=lambda a: -total(a)[2]):
         r = realized.get(a, {})
         rp, up, tot = total(a)
         n = r.get("n_trades", 0)
-        wr = f"{r.get('win_rate', 0) * 100:.0f}%" if n else "—"
+        wr = f"{r.get('win_rate', 0) * 100:.0f}%" if n else "-"
         flag = "  HALT" if (live_arms.get(a, {}).get("risk", {}) or {}).get("halted") else ""
         print(f"  {a:<11}{_m(rp):>11}{_m(up):>9}{_m(tot):>11}{n:>8}{wr:>6}{flag}")
 

@@ -1,5 +1,5 @@
 """
-Regime classification — is the market trending, mean-reverting, or chopping?
+Regime classification - is the market trending, mean-reverting, or chopping?
 
 Two dimensionless (hence cross-instrument-generalisable) diagnostics:
 
@@ -37,7 +37,7 @@ def variance_ratio(returns, q: int) -> float:
 
 
 def hurst_rs(prices, min_w: int = 8, max_w: int | None = None) -> float:
-    """Hurst via rescaled-range (R/S). Noisy on short series — use directionally."""
+    """Hurst via rescaled-range (R/S). Noisy on short series - use directionally."""
     x = np.log(np.asarray(prices, dtype=float))
     n = len(x)
     if n < 2 * min_w:
@@ -74,10 +74,10 @@ def classify_window(prices, q: int = 10,
     Label one window. Returns regime + the diagnostics behind it.
     regime ∈ {trend_up, trend_down, mean_revert, chop, unknown}
 
-    Trend is defined by a strong *directional* move — |drift|/vol ≥ drift_vol_min
+    Trend is defined by a strong *directional* move - |drift|/vol ≥ drift_vol_min
     (the "orderly trend" signature). Among low-drift windows, VR ≤ vr_mr flags
     mean-reversion; otherwise it's random chop. (|drift|/vol is the z-score of the
-    cumulative move, so ~N(0,1) under a random walk — a real trend runs 3–5.)
+    cumulative move, so ~N(0,1) under a random walk - a real trend runs 3-5.)
     """
     prices = np.asarray(prices, dtype=float)
     r = log_returns(prices)

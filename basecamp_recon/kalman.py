@@ -1,5 +1,5 @@
 """
-Constant-velocity Kalman filter — the trend/velocity estimator.
+Constant-velocity Kalman filter - the trend/velocity estimator.
 
 State x = [level, velocity]. We observe the price (microprice); the filter
 estimates the hidden *velocity* (trend) as the optimal blend of a motion model

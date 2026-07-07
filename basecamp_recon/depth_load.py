@@ -6,7 +6,7 @@ Reads the compacted depth (same files the collector stores / we synced to
 (drop bid/ask <= 0 or crossed books), and computes mid + microprice.
 
 The Kalman lens runs on the MICROPRICE (a cleaner fair value than the mid).
-dt is from collector_received_at (recv-side) — fine for a research prototype;
+dt is from collector_received_at (recv-side) - fine for a research prototype;
 note that for production velocity you'd prefer an exchange timestamp.
 """
 
@@ -41,7 +41,7 @@ def load_depth(name: str, date: str, data_dir: str = "/tmp/replay") -> pd.DataFr
     bp, bq = df.bid_price_01.to_numpy(float), df.bid_qty_01.to_numpy(float)
     ap, aq = df.ask_price_01.to_numpy(float), df.ask_qty_01.to_numpy(float)
 
-    # garbage guard — identical spirit to the live broker
+    # garbage guard - identical spirit to the live broker
     good = (bp > 0) & (ap > 0) & (ap >= bp)
     df = df.loc[good].reset_index(drop=True)
     bp, bq = bp[good], bq[good]

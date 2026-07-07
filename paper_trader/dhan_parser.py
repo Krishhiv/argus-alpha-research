@@ -1,7 +1,7 @@
 """
 Binary packet parsing for Dhan market and 20-level depth feeds.
 
-Copied verbatim from the collector's packet_parser.py — kept as a local copy
+Copied verbatim from the collector's packet_parser.py - kept as a local copy
 so the paper trader has zero dependency on the collector's Python path.
 Protocol source: Dhan WebSocket API binary format.
 """

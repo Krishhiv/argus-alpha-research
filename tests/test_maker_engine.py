@@ -125,7 +125,7 @@ class TestMakerEntry:
         assert res.n_posts > 0
 
     def test_orders_cancelled_on_timeout_in_flat_book(self):
-        """A flat book never moves bid/ask — every posted order should time out."""
+        """A flat book never moves bid/ask - every posted order should time out."""
         df = _flat_book(n=200)
         df.loc[10:100, "signal"] = 2.0
         bt = MakerBacktester("signal", entry_threshold=1.0, max_hold=10, order_timeout=5)
@@ -267,7 +267,7 @@ class TestEntryFiltering:
     def test_fresh_cross_avoids_repost_while_signal_high(self):
         """If signal is constant above threshold, fresh_cross posts ONE order."""
         df = _flat_book(n=200)
-        df["signal"] = 2.0  # sustained — never crosses fresh
+        df["signal"] = 2.0  # sustained - never crosses fresh
         bt = MakerBacktester("signal", entry_threshold=1.0, max_hold=5,
                              order_timeout=5, exit_mode="taker", fresh_cross=True)
         res = bt.run(df)

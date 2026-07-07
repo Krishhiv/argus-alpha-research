@@ -1,9 +1,9 @@
 """
-Tier E — queue-aware fill haircut (offline).
+Tier E - queue-aware fill haircut (offline).
 
-Replays the *real* PaperBroker over stored depth twice — once with the optimistic
+Replays the *real* PaperBroker over stored depth twice - once with the optimistic
 touch-fill model (Basecamp) and once with the queue-aware exit-fill model
-(Expenture I) — and reports how much P&L survives realistic fills. This turns the
+(Expenture I) - and reports how much P&L survives realistic fills. This turns the
 "breakeven p* ≈ 67% vs sim 76%" framing into a measured haircut per instrument-day.
 
 It drives the *same* broker code that runs live, so the haircut is apples-to-apples
@@ -26,7 +26,7 @@ from basecamp_recon.depth_load import load_depth
 
 
 class _NullLogger:
-    """No-op logger — the replay keeps trades in broker.trades, writes nothing."""
+    """No-op logger - the replay keeps trades in broker.trades, writes nothing."""
     def trade(self, row): pass
     def order_event(self, *a, **k): pass
     def pnl_snapshot(self, *a, **k): pass
@@ -94,7 +94,7 @@ def main() -> int:
     p.add_argument("--lot-size", type=int, default=None)
     a = p.parse_args()
     h = haircut(a.name, a.date, data_dir=a.data_dir, min_frac=a.min_frac, lot_size=a.lot_size)
-    print(f"\n=== Fill haircut — {h['name']} {h['date']}  ({h['packets']} packets) ===")
+    print(f"\n=== Fill haircut - {h['name']} {h['date']}  ({h['packets']} packets) ===")
     print(f"  optimistic (touch)    net = {h['optimistic_net']:>12,.0f}   "
           f"maker-exit rate {h['optimistic_maker_rate']:.0%}")
     print(f"  realistic  (queue {a.min_frac:g}) net = {h['realistic_net']:>12,.0f}   "

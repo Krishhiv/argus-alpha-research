@@ -1,4 +1,4 @@
-# Paper Trader — Deploy Guide
+# Paper Trader - Deploy Guide
 
 One-time setup on the VPS, then `git pull` to update forever.
 
@@ -41,7 +41,7 @@ sudo systemctl enable --now argus-paper-trader-report.timer
 
 ---
 
-## Daily workflow — update after pushing changes
+## Daily workflow - update after pushing changes
 
 ```bash
 ssh lightsail-mumbai

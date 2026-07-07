@@ -1,7 +1,7 @@
 """
 Out-of-sample validation for the maker strategy.
-Train: Apr 24 – May 15 (15 days)
-Test:  May 18 – May 22  (5 days)
+Train: Apr 24 - May 15 (15 days)
+Test:  May 18 - May 22  (5 days)
 """
 
 import subprocess

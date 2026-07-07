@@ -99,7 +99,7 @@ class TestFee:
         assert fee_2lot > fee_1lot
 
 
-# ── Broker — signal gating and order posting ─────────────────────────────────
+# ── Broker - signal gating and order posting ─────────────────────────────────
 
 class TestBrokerSignalGating:
     def test_below_threshold_no_post(self):
@@ -146,7 +146,7 @@ class TestBrokerSignalGating:
         assert br.n_posts == 2
 
 
-# ── Broker — entry cancel ─────────────────────────────────────────────────────
+# ── Broker - entry cancel ─────────────────────────────────────────────────────
 
 class TestBrokerCancel:
     def test_unfilled_entry_cancels_after_timeout(self):
@@ -160,7 +160,7 @@ class TestBrokerCancel:
         assert br._position_side == 0
 
 
-# ── Broker — fill detection (depth-only) ─────────────────────────────────────
+# ── Broker - fill detection (depth-only) ─────────────────────────────────────
 
 class TestBrokerFill:
     def _broker_pending_buy(self) -> PaperBroker:
@@ -182,7 +182,7 @@ class TestBrokerFill:
         assert br._position_side == -1
 
 
-# ── Broker — exit logic ───────────────────────────────────────────────────────
+# ── Broker - exit logic ───────────────────────────────────────────────────────
 
 class TestBrokerExit:
     def _filled_long(self) -> PaperBroker:
@@ -240,7 +240,7 @@ class TestBrokerExit:
         assert br.last_mid == pytest.approx(101.0)
 
 
-# ── Broker — queue doubt ──────────────────────────────────────────────────────
+# ── Broker - queue doubt ──────────────────────────────────────────────────────
 
 class TestBrokerQueueFill:
     def test_queue_filter_blocks_insufficient_consumption(self):
@@ -266,7 +266,7 @@ class TestBrokerQueueFill:
         assert br.n_fills == 1
 
 
-# ── Broker — economic edge gate ───────────────────────────────────────────────
+# ── Broker - economic edge gate ───────────────────────────────────────────────
 
 class TestBrokerEconomicGate:
     def test_blocks_when_half_spread_below_breakeven(self):
@@ -292,7 +292,7 @@ class TestBrokerEconomicGate:
         assert br.n_posts == 1
 
 
-# ── Broker — garbage / session-end packet guard ──────────────────────────────
+# ── Broker - garbage / session-end packet guard ──────────────────────────────
 
 class TestBrokerGarbagePackets:
     def test_zero_price_packet_no_post(self):
@@ -304,7 +304,7 @@ class TestBrokerGarbagePackets:
     def test_zero_price_packet_does_not_fill_or_corrupt_mid(self):
         br = PaperBroker("HDFCBANK")
         _depth(br, *_BUY)                        # post BUY at 100.0; last_mid = 100.5
-        _depth(br, 0.0, 0, 0.0, 0)               # garbage — must be dropped
+        _depth(br, 0.0, 0, 0.0, 0)               # garbage - must be dropped
         assert br.n_fills == 0                   # no spurious fill (bid 0 < 100)
         assert br._pending_entry is not None
         assert br.last_mid == pytest.approx(100.5)   # mid unchanged by garbage
@@ -316,7 +316,7 @@ class TestBrokerGarbagePackets:
         assert br.last_mid == 0.0
 
 
-# ── Broker — session entry cutoff ─────────────────────────────────────────────
+# ── Broker - session entry cutoff ─────────────────────────────────────────────
 
 class TestBrokerSessionCutoff:
     _LATE  = datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC)   # 15:30 IST (past cutoff)
@@ -333,7 +333,7 @@ class TestBrokerSessionCutoff:
         assert br.n_posts == 1
 
 
-# ── Broker — robust end-of-day force close ────────────────────────────────────
+# ── Broker - robust end-of-day force close ────────────────────────────────────
 
 class TestBrokerRobustEOD:
     def _filled_long(self) -> PaperBroker:
@@ -362,7 +362,7 @@ class TestBrokerRobustEOD:
         assert abs(t["net_pnl"]) < 1_000
 
 
-# ── Broker — hard price stop ──────────────────────────────────────────────────
+# ── Broker - hard price stop ──────────────────────────────────────────────────
 
 class TestBrokerStopLoss:
     def _filled_long(self) -> PaperBroker:
@@ -381,17 +381,17 @@ class TestBrokerStopLoss:
         assert br.trades[0]["net_pnl"] < 0
 
     def test_stop_does_not_fire_on_small_wobble(self):
-        # mid 99.85 is only 3 ticks adverse — below the 12-tick stop, must hold.
+        # mid 99.85 is only 3 ticks adverse - below the 12-tick stop, must hold.
         br = self._filled_long()
         _depth(br, 99.8, 500, 99.9, 500)          # mid 99.85 → 3 ticks adverse
         assert br._position_side == 1             # still in position
         assert all(t["exit_method"] != "taker_stop" for t in br.trades)
 
     def test_stop_threshold_is_active(self):
-        assert STOP_LOSS_TICKS > 0                # config sanity — stop is enabled
+        assert STOP_LOSS_TICKS > 0                # config sanity - stop is enabled
 
 
-# ── Broker — per-arm StrategyParams + reversal exit ───────────────────────────
+# ── Broker - per-arm StrategyParams + reversal exit ───────────────────────────
 
 class TestStrategyParams:
     def _open_long(self, params: StrategyParams) -> PaperBroker:
@@ -427,7 +427,7 @@ class TestStrategyParams:
         assert p.stop_loss_ticks == STOP_LOSS_TICKS and p.max_hold_packets == MAX_HOLD_PACKETS
 
 
-# ── Broker — queue-aware EXIT fill (Expenture I realistic fills) ───────────────
+# ── Broker - queue-aware EXIT fill (Expenture I realistic fills) ───────────────
 
 class TestBrokerQueueExitFill:
     def _open_long(self, params: StrategyParams) -> PaperBroker:
@@ -452,7 +452,7 @@ class TestBrokerQueueExitFill:
         assert br.trades[0]["exit_method"] == "maker_exit"
 
     def test_queue_exit_blocks_touch_until_cleared(self):
-        # Realistic model: touch alone does NOT fill — queue must clear first
+        # Realistic model: touch alone does NOT fill - queue must clear first
         br = self._open_long(StrategyParams(queue_exit_fill=True, queue_exit_min_frac=1.0))
         self._post_exit_at_102(br)
         for _ in range(MAX_HOLD_PACKETS + 1):
@@ -482,7 +482,7 @@ class TestBrokerQueueExitFill:
         assert t["qty_consumed"] == 200
 
 
-# ── Broker — entry signal-context logging (Expenture I observability) ──────────
+# ── Broker - entry signal-context logging (Expenture I observability) ──────────
 
 class TestBrokerEntryContext:
     def test_entry_context_captured_in_trade(self):
@@ -508,7 +508,7 @@ class TestBrokerEntryContext:
         assert t["entry_sig"] > 0                  # entry context still present
 
 
-# ── Risk — daily loss circuit breaker ─────────────────────────────────────────
+# ── Risk - daily loss circuit breaker ─────────────────────────────────────────
 
 class TestDayRiskCircuitBreaker:
     def test_halts_when_limit_breached(self):

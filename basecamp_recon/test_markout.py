@@ -42,7 +42,7 @@ def test_load_day_mid_cleans_and_sorts(tmp_path):
 
 
 def test_markout_captures_favorable_fill_and_adverse_drift(tmp_path, monkeypatch):
-    # Mid rises 100→100 for 5s then FALLS — a long that filled cheap then gets run over.
+    # Mid rises 100→100 for 5s then FALLS - a long that filled cheap then gets run over.
     # mids per second: t0=100, t1..: stays then declines after fill
     mids = [100.0, 100.0, 100.0, 100.0, 100.0, 99.0, 98.0]  # falls after 5s
     _write_depth(tmp_path, "AXISBANK", "2026-06-24", mids)

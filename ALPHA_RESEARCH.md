@@ -1,4 +1,4 @@
-# Alpha Research Handoff — NSE Equity Futures MFT System
+# Alpha Research Handoff - NSE Equity Futures MFT System
 **Project:** `mft_collector` | **Author:** Krishhiv | **Date:** May 2026  
 **Constraint:** No ML/RL-based strategies. Pure statistical, mathematical, and structural alphas only.
 
@@ -10,7 +10,7 @@
 - **Exchange:** NSE equity futures
 - **Deployment:** AWS Lightsail Mumbai (Ubuntu 24.04), systemd service
 - **Feed latency p99:** ~0.4s (WebSocket, event-driven)
-- **Feed rates:** Market feed ~1–5 updates/sec; Depth feed ~15–30 packets/sec during active hours
+- **Feed rates:** Market feed ~1-5 updates/sec; Depth feed ~15-30 packets/sec during active hours
 - **Signal aggregator cadence:** Every 100ms (not per-packet)
 
 ### Instrument Universe
@@ -22,21 +22,21 @@
 | TATASTEEL | Standalone | Validate before full use |
 | KOTAKBANK | Standalone | Validate before full use |
 
-**Stat-arb pairs:** HDFC/ICICI (~0.82 correlation, cointegrated, HDFC leads ICICI ~2–3s)
+**Stat-arb pairs:** HDFC/ICICI (~0.82 correlation, cointegrated, HDFC leads ICICI ~2-3s)
 
 ### Data Available
-- **~15–16 trading days** of recorded data
+- **~15-16 trading days** of recorded data
 - **Market Parquet** (~23 cols): `exchange_ts`, `recv_ts`, `security_id`, `ltp`, `ltq`, `ltt`, `atp`, `oi`, `volume`, `latency_us`, `obi_raw`, `obi_ema` (α=0.08), `obi_flip_rate`, `price_z_60s`, `kalman_price`, `trade_class`, `buy_vol_30s`, `sell_vol_30s`, `bid_liq_total`, `ask_liq_total`, `oi_change_rate`, `regime`, `gap_flag`
 - **Depth Parquet** (~125 cols): 20×`bid_price`, 20×`bid_size`, 20×`bid_orders`, 20×`ask_price`, 20×`ask_size`, 20×`ask_orders` + metadata (`exchange_ts`, `recv_ts`, `security_id`, `latency_us`, + 1 more)
 - **Merge strategy:** `asof` join at research time on `exchange_ts`
 
 ### Hard Constraints
-- No ML/RL (insufficient data for convergence — ~15 days)
-- No HMM training yet (needs ~3–4 weeks minimum)
-- No Backtrader/Zipline — custom event-driven backtester only
+- No ML/RL (insufficient data for convergence - ~15 days)
+- No HMM training yet (needs ~3-4 weeks minimum)
+- No Backtrader/Zipline - custom event-driven backtester only
 - STT cost model must be included in all backtests (STT ~69% of round-trip cost)
 - Max 1 open position per symbol, max 2 symbols simultaneously
-- Avoid 9:15–9:20 open and 3:25–3:30 close windows
+- Avoid 9:15-9:20 open and 3:25-3:30 close windows
 - Staleness gate: suppress trade-dependent signals when `recv_ts - last_market_ts > 2.0s`
 
 ---
@@ -47,7 +47,7 @@ Every backtest **must** use the following cost model. Do not run P&L analysis wi
 
 ```python
 # NSE Equity Futures Round-Trip Cost Model
-# Figures approximate — update with current NSE schedule if needed
+# Figures approximate - update with current NSE schedule if needed
 
 STT_RATE = 0.0001          # 0.01% on sell side only (futures)
 EXCHANGE_TXN_CHARGE = 0.0000188  # NSE transaction charge
@@ -69,7 +69,7 @@ def round_trip_cost(entry_price, exit_price, lot_size):
     return stt + txn + sebi + brokerage + stamp + slippage
 ```
 
-**Rule of thumb:** Net edge per trade must exceed ~0.05–0.08% of notional to be viable after costs.
+**Rule of thumb:** Net edge per trade must exceed ~0.05-0.08% of notional to be viable after costs.
 
 ---
 
@@ -84,7 +84,7 @@ Key design requirements:
 - Asof-join market feed state at each depth event
 - Position manager: max 1 open per symbol, max 2 symbols simultaneously
 - Daily loss limit hard stop
-- Time filter: no entries 9:15–9:20 or 3:25–3:30
+- Time filter: no entries 9:15-9:20 or 3:25-3:30
 - Staleness gate: no signal if recv_ts - last_market_ts > 2.0s
 ```
 
@@ -113,13 +113,13 @@ Each alpha below has: **Hypothesis → Features → Entry/Exit logic → Impleme
 
 ---
 
-### A1 — Institutional Footprint Gradient
+### A1 - Institutional Footprint Gradient
 **Category:** Depth structural  
-**Speed tier:** 5–15 pkt/sec (depth)  
+**Speed tier:** 5-15 pkt/sec (depth)  
 **Novel data use:** `bid_orders`, `ask_orders` (order count per level)
 
 **Hypothesis:**  
-Average order size at each level (`size / orders`) reveals order fragmentation. Institutional accumulation creates a characteristic *gradient* across levels — large concentrated orders sit deeper, not at touch. The rate of change of this gradient precedes directional moves.
+Average order size at each level (`size / orders`) reveals order fragmentation. Institutional accumulation creates a characteristic *gradient* across levels - large concentrated orders sit deeper, not at touch. The rate of change of this gradient precedes directional moves.
 
 **Features:**
 ```python
@@ -150,13 +150,13 @@ gradient_asymmetry = bid_gradient_velocity - ask_gradient_velocity
 
 ---
 
-### A2 — Order Fragmentation Regime
+### A2 - Order Fragmentation Regime
 **Category:** Depth structural  
-**Speed tier:** 5–15 pkt/sec  
+**Speed tier:** 5-15 pkt/sec  
 **Novel data use:** `bid_orders`, `ask_orders`
 
 **Hypothesis:**  
-When smart money wants to hide, it fragments (same total size, more orders). When urgent, it consolidates. The fragmentation index is a *classifier* that modifies how we interpret OBI — not a raw signal itself.
+When smart money wants to hide, it fragments (same total size, more orders). When urgent, it consolidates. The fragmentation index is a *classifier* that modifies how we interpret OBI - not a raw signal itself.
 
 **Features:**
 ```python
@@ -183,13 +183,13 @@ obi = (bid_size_total - ask_size_total) / (bid_size_total + ask_size_total + 1e-
 
 ---
 
-### A3 — Book Symmetry Break
+### A3 - Book Symmetry Break
 **Category:** Depth structural  
-**Speed tier:** 5–15 pkt/sec  
+**Speed tier:** 5-15 pkt/sec  
 **Novel data use:** Full 20-level size vectors
 
 **Hypothesis:**  
-A healthy book is symmetric — bid and ask sides mirror each other in shape. Symmetry breaks *before* price moves. The *direction* of the break (which side develops unusual shape) and *at which levels* (top vs deep) tells different stories.
+A healthy book is symmetric - bid and ask sides mirror each other in shape. Symmetry breaks *before* price moves. The *direction* of the break (which side develops unusual shape) and *at which levels* (top vs deep) tells different stories.
 
 **Features:**
 ```python
@@ -199,7 +199,7 @@ import scipy.stats as stats
 bid_dist = bid_sizes / (bid_sizes.sum() + 1e-9)   # shape (20,)
 ask_dist = ask_sizes / (ask_sizes.sum() + 1e-9)
 
-# KL divergence (asymmetric — compute both directions)
+# KL divergence (asymmetric - compute both directions)
 kl_bid_from_ask = stats.entropy(bid_dist + 1e-9, ask_dist + 1e-9)
 kl_ask_from_bid = stats.entropy(ask_dist + 1e-9, bid_dist + 1e-9)
 
@@ -215,19 +215,19 @@ symmetry_break = kl_bid_from_ask - kl_ask_from_bid
 **Exit:** Symmetry_break reverts toward zero, or fixed holding period.
 
 **Research questions:**
-- KL divergence vs Wasserstein distance — which is more predictive?
-- Top-5 break vs deep-book break — different holding periods?
+- KL divergence vs Wasserstein distance - which is more predictive?
+- Top-5 break vs deep-book break - different holding periods?
 - Optimal smoothing: raw snapshot vs EMA of symmetry_break?
 
 ---
 
-### A4 — Gravity Center Migration
+### A4 - Gravity Center Migration
 **Category:** Depth physics  
-**Speed tier:** 5–15 pkt/sec  
+**Speed tier:** 5-15 pkt/sec  
 **Novel data use:** Full 20-level price × size
 
 **Hypothesis:**  
-The center of mass (COG) of the book — weighted by size across all 20 levels — is a richer quantity than best bid/ask. Its *velocity* and *acceleration* predict price direction. When both bid and ask COGs drift in the same direction, price follows. When they diverge, mean reversion.
+The center of mass (COG) of the book - weighted by size across all 20 levels - is a richer quantity than best bid/ask. Its *velocity* and *acceleration* predict price direction. When both bid and ask COGs drift in the same direction, price follows. When they diverge, mean reversion.
 
 **Features:**
 ```python
@@ -259,13 +259,13 @@ cog_divergence = bid_cog_vel - ask_cog_vel
 
 ---
 
-### A5 — Level Activation Pattern (Topological)
+### A5 - Level Activation Pattern (Topological)
 **Category:** Depth topology  
-**Speed tier:** 5–15 pkt/sec  
+**Speed tier:** 5-15 pkt/sec  
 **Novel data use:** Full 20-level presence/absence
 
 **Hypothesis:**  
-Not all 20 levels are active at once. The *pattern* of which levels have meaningful liquidity changes over the day. Condensing books (fewer levels active) precede breakouts. Spreading books (more levels active) precede mean reversion. This is purely topological — no prices or sizes, just structure.
+Not all 20 levels are active at once. The *pattern* of which levels have meaningful liquidity changes over the day. Condensing books (fewer levels active) precede breakouts. Spreading books (more levels active) precede mean reversion. This is purely topological - no prices or sizes, just structure.
 
 **Features:**
 ```python
@@ -298,13 +298,13 @@ condensation_signal = bid_condensation - ask_condensation
 
 ---
 
-### A6 — Liquidity Half-Life (Tail Risk Signal)
+### A6 - Liquidity Half-Life (Tail Risk Signal)
 **Category:** Depth impact  
-**Speed tier:** 5–15 pkt/sec  
+**Speed tier:** 5-15 pkt/sec  
 **Novel data use:** Full 20-level cumulative size
 
 **Hypothesis:**  
-Place a hypothetical market order of fixed size X. How deep into the book does it consume? Track how this *impact depth* evolves. When it suddenly shallows (same X eats deeper into the book), invisible thinning is occurring — not visible from spread or L1. Price is about to gap.
+Place a hypothetical market order of fixed size X. How deep into the book does it consume? Track how this *impact depth* evolves. When it suddenly shallows (same X eats deeper into the book), invisible thinning is occurring - not visible from spread or L1. Price is about to gap.
 
 **Features:**
 ```python
@@ -336,14 +336,14 @@ bid_depth_change = bid_depth_t - bid_depth_{t-N}  # Negative = shallowing = thin
 
 ---
 
-### A7 — Cross-Symbol Book Resonance (StatArb Enhancement)
+### A7 - Cross-Symbol Book Resonance (StatArb Enhancement)
 **Category:** Cross-instrument, StatArb modifier  
-**Speed tier:** 5–15 pkt/sec  
+**Speed tier:** 5-15 pkt/sec  
 **Applicable pair:** HDFC / ICICI  
 **Novel data use:** 20-level size vectors from both symbols simultaneously
 
 **Hypothesis:**  
-HDFC and ICICI books don't just correlate in price — their *book shapes* may resonate or decouple before the price relationship breaks down. A sudden decoupling in book shape is an early warning that the cointegration relationship is stressed.
+HDFC and ICICI books don't just correlate in price - their *book shapes* may resonate or decouple before the price relationship breaks down. A sudden decoupling in book shape is an early warning that the cointegration relationship is stressed.
 
 **Features:**
 ```python
@@ -378,9 +378,9 @@ resonance_z = (book_resonance - resonance_ema.mean()) / (resonance_ema.std() + 1
 
 ---
 
-### A8 — VWAP Deviation with Book Confirmation
+### A8 - VWAP Deviation with Book Confirmation
 **Category:** Price-based with book confirmation  
-**Speed tier:** 1–5 pkt/sec  
+**Speed tier:** 1-5 pkt/sec  
 **Data used:** Market feed (`atp`, `ltp`) + depth book
 
 **Hypothesis:**  
@@ -407,13 +407,13 @@ obi = (bid_liq_total - ask_liq_total) / (bid_liq_total + ask_liq_total + 1e-9)
 **Research questions:**
 - Optimal `vwap_z` threshold (2.0 is a starting point)?
 - Does book confirmation actually improve Sharpe vs naked VWAP?
-- Intraday pattern — does VWAP mean reversion work better in specific sessions?
+- Intraday pattern - does VWAP mean reversion work better in specific sessions?
 
 ---
 
-### A9 — OI Divergence Fade
+### A9 - OI Divergence Fade
 **Category:** Open interest anomaly  
-**Speed tier:** 1–5 pkt/sec  
+**Speed tier:** 1-5 pkt/sec  
 **Data used:** Market feed (`oi`, `ltp`, `oi_change_rate`)
 
 **Hypothesis:**  
@@ -432,9 +432,9 @@ divergence_score = price_change_60s * (-oi_change_60s)  # Positive = divergence
 ```
 
 **Entry:** Fade the price move when `divergence_score > threshold`.  
-**Exit:** Fixed 60–120s holding period.
+**Exit:** Fixed 60-120s holding period.
 
-**Note:** OI updates are slower than price — confirm the Dhan feed OI update frequency before using.
+**Note:** OI updates are slower than price - confirm the Dhan feed OI update frequency before using.
 
 **Research questions:**
 - How frequently does OI update in the Dhan market feed (per second? per minute?)?
@@ -442,13 +442,13 @@ divergence_score = price_change_60s * (-oi_change_60s)  # Positive = divergence
 
 ---
 
-### A10 — Spread Breakout with Book Pressure
+### A10 - Spread Breakout with Book Pressure
 **Category:** Microstructure event  
-**Speed tier:** 15–30 pkt/sec  
+**Speed tier:** 15-30 pkt/sec  
 **Data used:** Depth feed (L1 bid/ask)
 
 **Hypothesis:**  
-A sudden widening of the bid-ask spread combined with one-sided book pressure indicates a directional move is imminent — not random noise.
+A sudden widening of the bid-ask spread combined with one-sided book pressure indicates a directional move is imminent - not random noise.
 
 **Features:**
 ```python
@@ -463,13 +463,13 @@ l1_obi = (bid_size[0] - ask_size[0]) / (bid_size[0] + ask_size[0] + 1e-9)
 - `spread_z > 2.0` AND `l1_obi > 0.3` → spread widening, bid dominant → **long** (aggressive sellers hitting thin ask)
 - `spread_z > 2.0` AND `l1_obi < -0.3` → spread widening, ask dominant → **short**
 
-**Exit:** Spread reverts to normal (spread_z < 0.5), or fixed time stop (5–15s).
+**Exit:** Spread reverts to normal (spread_z < 0.5), or fixed time stop (5-15s).
 
 ---
 
-### A11 — Kalman Fair Value Deviation
+### A11 - Kalman Fair Value Deviation
 **Category:** Kalman filter, fair value  
-**Speed tier:** 1–5 pkt/sec  
+**Speed tier:** 1-5 pkt/sec  
 **Data used:** Market feed (`kalman_price`, `ltp`)
 
 **Note:** `kalman_price` is already computed and stored in the market feed Parquet. Use it directly.
@@ -490,14 +490,14 @@ kalman_dev_z = (kalman_deviation - rolling_mean(kalman_deviation, N)) / (rolling
 
 ---
 
-### A12 — HDFC→ICICI Lead-Lag Momentum
+### A12 - HDFC→ICICI Lead-Lag Momentum
 **Category:** Cross-symbol lead-lag  
-**Speed tier:** 1–5 pkt/sec (market feed)  
+**Speed tier:** 1-5 pkt/sec (market feed)  
 **Data used:** Market feed for both symbols  
-**Applicable pair:** HDFC leads ICICI by ~2–3s
+**Applicable pair:** HDFC leads ICICI by ~2-3s
 
 **Hypothesis:**  
-HDFC price moves tend to predict ICICI price moves with a ~2–3s lag. A directional move in HDFC that has not yet appeared in ICICI is an entry signal on ICICI.
+HDFC price moves tend to predict ICICI price moves with a ~2-3s lag. A directional move in HDFC that has not yet appeared in ICICI is an entry signal on ICICI.
 
 **Features:**
 ```python
@@ -512,42 +512,42 @@ lead_lag_signal = hdfc_return_3s - icici_return_3s
 ```
 
 **Entry:** `lead_lag_signal > threshold` → long ICICI (following HDFC up). Vice versa for short.  
-**Exit:** 3–5s holding period (give time for ICICI to catch up).
+**Exit:** 3-5s holding period (give time for ICICI to catch up).
 
 **Implementation note:** This requires careful timestamp alignment. Use `exchange_ts` not `recv_ts` for alignment to avoid feed latency artifacts.
 
 **Research questions:**
-- Is the 2–3s lead confirmed in your actual recorded data? Measure cross-correlation between HDFC and ICICI returns at lags 1–10s.
+- Is the 2-3s lead confirmed in your actual recorded data? Measure cross-correlation between HDFC and ICICI returns at lags 1-10s.
 - Does the lead-lag relationship hold at different times of day?
 
 ---
 
 ## 5. Research Priority Order
 
-Given 15–16 days of data and no ML, recommended research sequence:
+Given 15-16 days of data and no ML, recommended research sequence:
 
-**Phase 1 — Validate data and baseline (Days 1–3)**
+**Phase 1 - Validate data and baseline (Days 1-3)**
 1. Confirm KOTAKBANK and TATASTEEL data quality passes 5-day validation
 2. Measure actual HDFC→ICICI lead-lag from recorded data (cross-correlation)
 3. Confirm OI update frequency from Dhan feed
 4. Establish baseline metrics: spread distributions, OBI distributions, book depth stats per instrument
 
-**Phase 2 — Pure statistical alphas (Days 3–7)**
-1. **A8 (VWAP Deviation)** — simplest, uses existing `atp`/`ltp` columns, easy to validate
-2. **A11 (Kalman Deviation)** — already have `kalman_price` computed, trivial feature engineering
-3. **A9 (OI Divergence)** — uses existing columns, straightforward
-4. **A12 (Lead-Lag)** — validate the lag structure first before building signal
+**Phase 2 - Pure statistical alphas (Days 3-7)**
+1. **A8 (VWAP Deviation)** - simplest, uses existing `atp`/`ltp` columns, easy to validate
+2. **A11 (Kalman Deviation)** - already have `kalman_price` computed, trivial feature engineering
+3. **A9 (OI Divergence)** - uses existing columns, straightforward
+4. **A12 (Lead-Lag)** - validate the lag structure first before building signal
 
-**Phase 3 — Depth-based novel alphas (Days 7–14)**
-1. **A5 (Level Activation)** — computationally simple, purely topological, fast to prototype
-2. **A6 (Liquidity Half-Life)** — use as risk filter first, then test as entry signal
-3. **A4 (Gravity COG)** — O(20) computation, clean hypothesis
-4. **A3 (Book Symmetry Break)** — requires scipy, slightly more complex
+**Phase 3 - Depth-based novel alphas (Days 7-14)**
+1. **A5 (Level Activation)** - computationally simple, purely topological, fast to prototype
+2. **A6 (Liquidity Half-Life)** - use as risk filter first, then test as entry signal
+3. **A4 (Gravity COG)** - O(20) computation, clean hypothesis
+4. **A3 (Book Symmetry Break)** - requires scipy, slightly more complex
 
-**Phase 4 — Order-count alphas (Days 14+)**
-1. **A2 (Fragmentation Regime)** — as OBI modifier
-2. **A1 (Institutional Gradient)** — full construction
-3. **A7 (Cross-Symbol Resonance)** — StatArb enhancement
+**Phase 4 - Order-count alphas (Days 14+)**
+1. **A2 (Fragmentation Regime)** - as OBI modifier
+2. **A1 (Institutional Gradient)** - full construction
+3. **A7 (Cross-Symbol Resonance)** - StatArb enhancement
 
 ---
 
@@ -655,6 +655,6 @@ scikit-learn==1.4.2
 
 7. **Division safety:** Always add `1e-9` to denominators when dividing by order counts, sizes, or standard deviations. Zero counts are common for deep levels.
 
-8. **Regime column:** Market feed contains a `regime` column (TRENDING / MEAN_REVERTING / VOLATILE_BREAKOUT / DEAD). Use this to stratify backtest results by regime — don't report aggregate metrics only.
+8. **Regime column:** Market feed contains a `regime` column (TRENDING / MEAN_REVERTING / VOLATILE_BREAKOUT / DEAD). Use this to stratify backtest results by regime - don't report aggregate metrics only.
 
 ---

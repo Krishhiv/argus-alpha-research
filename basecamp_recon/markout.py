@@ -1,5 +1,5 @@
 """
-Adverse-selection / markout analysis — the honest test of the maker edge.
+Adverse-selection / markout analysis - the honest test of the maker edge.
 
 The optimistic paper fills capture 15-25x the spread, which means we're booking
 *directional* moves a passive order would not really get. Markout analysis
@@ -13,7 +13,7 @@ measures, straight from the stored depth and independent of the fill model:
       A maker is being *picked off* when adverse drift > captured edge.
 
   Mid-to-mid PnL = dir * (mid(exit_ts) - mid(entry_ts)) * qty - fee
-      Marks BOTH legs to the mid — zero spread capture, pure directional. If this
+      Marks BOTH legs to the mid - zero spread capture, pure directional. If this
       is still positive, the signal has real directional alpha; if it collapses to
       ≤0, the entire paper profit was spread-capture / fill artifact.
 

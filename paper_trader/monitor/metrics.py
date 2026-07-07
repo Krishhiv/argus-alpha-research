@@ -1,7 +1,7 @@
 """
 Realized-metrics computation for the paper-trader monitor.
 
-Pure functions over the durable trade CSV — no HTTP, no global state — so they
+Pure functions over the durable trade CSV - no HTTP, no global state - so they
 are unit-testable and work whether or not the live trader is running.
 """
 

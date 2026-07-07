@@ -6,7 +6,7 @@ backoff on any error. Callers pass synchronous callbacks; the event loop
 calls them from the receive loop.
 
 security_ids is a {underlying_symbol: security_id} dict resolved at startup
-by paper_trader.contracts — automatically correct after monthly expiry rolls.
+by paper_trader.contracts - automatically correct after monthly expiry rolls.
 
 Bid+ask pairing for depth:
   Dhan sends bid (response_code=41) and ask (response_code=51) as separate
@@ -131,7 +131,7 @@ async def run_depth_feed(
             log.info("Depth feed task cancelled")
             return
         except Exception as exc:
-            log.warning("Depth feed error: %s — retrying in %.0fs", exc, backoff)
+            log.warning("Depth feed error: %s - retrying in %.0fs", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(_BACKOFF_MAX, backoff * 2)
 
@@ -194,6 +194,6 @@ async def run_market_feed(
             log.info("Market feed task cancelled")
             return
         except Exception as exc:
-            log.warning("Market feed error: %s — retrying in %.0fs", exc, backoff)
+            log.warning("Market feed error: %s - retrying in %.0fs", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(_BACKOFF_MAX, backoff * 2)

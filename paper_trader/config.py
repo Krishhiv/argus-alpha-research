@@ -1,5 +1,5 @@
 """
-Paper trader configuration — single source of truth for all parameters.
+Paper trader configuration - single source of truth for all parameters.
 Mirror any changes here back to the backtest if strategy params change.
 """
 
@@ -14,7 +14,7 @@ LOT_SIZES: dict[str, int] = {
 
 # Live trading universe. TCS is SUSPENDED: across May 29 + June 1-2 (live) and a
 # replay of June 1-2 depth, TCS lost at a ~49% win-rate under every edge-gate
-# setting. Root cause is structural — it has the highest per-share break-even
+# setting. Root cause is structural - it has the highest per-share break-even
 # (₹0.72, STT-dominated by its ~₹2460 price) and the weakest signal (flagged in
 # the IC analysis). The banks (ICICIBANK, RELIANCE) carry the alpha. Re-add TCS
 # here to resume it once the signal is improved. LOT_SIZES keeps all 4 for the
@@ -24,10 +24,10 @@ INSTRUMENTS = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
 # ── Strategy parameters ───────────────────────────────────────────────────────
 
 # ENTRY_THRESHOLD is now only a SIGNAL FLOOR (sub-noise guard), not the primary
-# gate. The primary entry gate is the economic edge gate below — a flat rupee
+# gate. The primary entry gate is the economic edge gate below - a flat rupee
 # threshold is meaningless across instruments whose price, spread, and per-share
 # fees differ 3×. See EDGE_MARGIN.
-ENTRY_THRESHOLD      = 0.15   # minimum |micro_deviation| (rupees) — signal floor only
+ENTRY_THRESHOLD      = 0.15   # minimum |micro_deviation| (rupees) - signal floor only
 MAX_HOLD_PACKETS     = 250    # taker fallback after this many packets (~100s)
 ORDER_TIMEOUT_PKTS   = 10     # cancel unfilled entry after this many packets (~4s)
 MIN_HOLD_PKTS        = 10     # packets in position before posting passive exit (~4s)
@@ -38,7 +38,7 @@ TICK_SIZE            = 0.05   # NSE equity futures minimum price increment
 # entry), exit at market immediately rather than waiting for MAX_HOLD_PACKETS.
 # Caps the left tail of taker losses. 0 = disabled (pure time-based exit).
 # 12 ticks (~₹0.60) is a deliberately WIDE disaster-stop: it leaves slow,
-# recoverable wobbles alone (tight stops backfire — they cut winners) and only
+# recoverable wobbles alone (tight stops backfire - they cut winners) and only
 # fires on genuine adverse runs, capping a single trade to ~−0.23% of ₹5L.
 STOP_LOSS_TICKS      = 12
 
@@ -47,7 +47,7 @@ STOP_LOSS_TICKS      = 12
 # day; open positions still close normally.
 #
 # This is a CATASTROPHE / bug backstop, NOT a daily risk control. Replaying
-# June 1-3 showed the strategy mean-reverts intraday — every day recovered from
+# June 1-3 showed the strategy mean-reverts intraday - every day recovered from
 # a sizeable drawdown (min −₹5.6k → +₹6.1k; −₹3.1k → +₹9.9k; −₹7.8k → −₹0.2k).
 # A tight breaker (e.g. −₹7.5k) would have locked in the June 3 trough and
 # killed the recovery, turning a flat day into the worst of the three. So the
@@ -85,12 +85,12 @@ SESSION_END   = "15:30"
 # No NEW entries after this IST time. The depth feed goes silent ~15:30 and
 # Dhan emits zero-price packets at close; entering late risks an un-exitable
 # position force-closed on a stale/garbage mid. 15:25 matches the research
-# session filter (09:20–15:25).
+# session filter (09:20-15:25).
 NO_NEW_ENTRY_IST = "15:25"
 
 # ── Reporting ─────────────────────────────────────────────────────────────────
 
-REPORT_EMAIL_TO = "krishhiv@gmail.com"   # hardcoded — never read from .env
+REPORT_EMAIL_TO = "krishhiv@gmail.com"   # hardcoded - never read from .env
 
 # ── Logging paths (relative to repo root on VPS) ─────────────────────────────
 
@@ -104,4 +104,4 @@ PNL_LOG         = f"{LOGS_DIR}/paper_pnl.csv"
 # The running trader writes a live state snapshot here every interval; the
 # monitor server reads it (plus the CSV logs) to render the dashboard.
 TELEMETRY_PATH         = f"{LOGS_DIR}/paper_telemetry.json"
-TELEMETRY_INTERVAL_SEC = 1.0   # 1 Hz live snapshot — matches the dashboard poll rate
+TELEMETRY_INTERVAL_SEC = 1.0   # 1 Hz live snapshot - matches the dashboard poll rate

@@ -1,5 +1,5 @@
 """
-Smoke tests for research/features/depth_features.py — composite signal.
+Smoke tests for research/features/depth_features.py - composite signal.
 """
 
 import numpy as np
@@ -76,10 +76,10 @@ class TestAddComposite:
         df   = _make_depth_df(n=600)
         df   = add_all_features(df, size_threshold=500, order_size=5000)
         vals = df["composite_eq"].dropna()
-        assert vals.abs().max() < 20, "composite has extreme outliers — z-score may be broken"
+        assert vals.abs().max() < 20, "composite has extreme outliers - z-score may be broken"
 
     def test_composite_has_variance(self):
-        # Should not be a constant — must vary across packets
+        # Should not be a constant - must vary across packets
         df  = _make_depth_df(n=500)
         df  = add_all_features(df, size_threshold=500, order_size=5000)
         assert df["composite_eq"].std() > 0

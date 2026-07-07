@@ -1,5 +1,5 @@
 """
-The overfitting-aware gauntlet — isolated, self-contained (no dependency on the
+The overfitting-aware gauntlet - isolated, self-contained (no dependency on the
 maker-era code so alpha_lab stands alone).
 
 n_eff → PSR → DSR → PBO, the discipline every candidate alpha must pass on
@@ -25,7 +25,7 @@ def norm_cdf(z: float) -> float:
 
 
 def norm_ppf(p: float) -> float:
-    """Inverse normal CDF — Acklam's rational approximation (|err| < 1.2e-9)."""
+    """Inverse normal CDF - Acklam's rational approximation (|err| < 1.2e-9)."""
     if not 0.0 < p < 1.0:
         return float("-inf") if p <= 0 else float("inf")
     a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,

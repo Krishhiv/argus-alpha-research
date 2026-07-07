@@ -7,7 +7,7 @@ one /api/monitor endpoint that merges:
   - live state (open positions, unrealized PnL, breaker, feed) from the running
     trader's telemetry snapshot (when the trader is up)
 
-Bind 127.0.0.1 and reach it over an SSH tunnel — nothing is exposed publicly.
+Bind 127.0.0.1 and reach it over an SSH tunnel - nothing is exposed publicly.
 
 Run on the VPS:
     venv/bin/python -m paper_trader.monitor.serve_monitor --port 8082
@@ -45,7 +45,7 @@ _MAX_EQUITY_PTS = 240    # downsample equity curves for the wire (charts don't n
 
 def _downsample(curve: list, max_pts: int = _MAX_EQUITY_PTS) -> list:
     """Evenly thin an equity curve to <= max_pts, always keeping the last point.
-    Keeps the dashboard payload small — a full per-trade curve (700+ pts × 7 arms)
+    Keeps the dashboard payload small - a full per-trade curve (700+ pts × 7 arms)
     bloats the response to ~145KB, which stalls the tunnel on a broken-MTU path."""
     n = len(curve)
     if n <= max_pts:

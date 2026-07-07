@@ -3,9 +3,9 @@ Generate the A1 (cointegration pairs / OU) pre-research notebooks.
 
 Run:  python research/pairs_ou/build_notebooks.py
 Produces three .ipynb in this directory:
-  01_data_prep.ipynb            (run on the VPS — needs the stored depth + pyarrow)
-  02_cointegration_screen.ipynb (portable — needs statsmodels)
-  03_ou_fit_and_backtest.ipynb  (portable — reuses basecamp_recon.arm_stats gauntlet)
+  01_data_prep.ipynb            (run on the VPS - needs the stored depth + pyarrow)
+  02_cointegration_screen.ipynb (portable - needs statsmodels)
+  03_ou_fit_and_backtest.ipynb  (portable - reuses basecamp_recon.arm_stats gauntlet)
 
 Cell sources are authored as plain Python strings; nbformat handles all escaping,
 so the emitted notebooks are guaranteed schema-valid.
@@ -28,11 +28,11 @@ def build(cells):
     return nb
 
 
-# ── Notebook 1 — data prep ─────────────────────────────────────────────────────
+# ── Notebook 1 - data prep ─────────────────────────────────────────────────────
 
 NB1 = [
 ("md", """\
-# A1 Pairs/OU — 01 · Data Prep
+# A1 Pairs/OU - 01 · Data Prep
 
 **Run this on the VPS** (the 20-level depth lives at `~/data/tbt-dhan/depth`, and the
 collector venv has `pyarrow`):
@@ -153,14 +153,14 @@ print(f"  rsync -avz lightsail-mumbai:{OUT_DIR}/ ./research/pairs_ou/out/")"""),
 ]
 
 
-# ── Notebook 2 — cointegration screen ──────────────────────────────────────────
+# ── Notebook 2 - cointegration screen ──────────────────────────────────────────
 
 NB2 = [
 ("md", """\
-# A1 Pairs/OU — 02 · Cointegration Screen
+# A1 Pairs/OU - 02 · Cointegration Screen
 
 Find pairs with a **stationary spread**, the precondition for OU mean-reversion.
-Method: Engle-Granger — OLS hedge ratio β on log-prices, ADF test on the residual.
+Method: Engle-Granger - OLS hedge ratio β on log-prices, ADF test on the residual.
 We split **in-sample / out-of-sample** and require cointegration to hold in *both*.
 
 > **Multiple-testing discipline:** we test every pair, so the best one looks good by
@@ -252,17 +252,17 @@ print("wrote candidate_pairs.csv (N_TRIALS=%d)" % N_TRIALS)"""),
 
 ("md", """\
 **Read it honestly:** a pair passing here is a *candidate*, not an edge. Beta drift
-matters as much as the ADF p-value — a spread that's stationary but whose hedge ratio
+matters as much as the ADF p-value - a spread that's stationary but whose hedge ratio
 wanders is not tradeable. If **zero** pairs pass in both halves, that's a clean *kill*
 of A1 on this data; don't lower ALPHA to manufacture survivors. Next: `03_ou_fit_and_backtest.ipynb`."""),
 ]
 
 
-# ── Notebook 3 — OU fit + cost-realistic backtest + gauntlet ────────────────────
+# ── Notebook 3 - OU fit + cost-realistic backtest + gauntlet ────────────────────
 
 NB3 = [
 ("md", """\
-# A1 Pairs/OU — 03 · OU Fit + Cost-Realistic Backtest + Gauntlet
+# A1 Pairs/OU - 03 · OU Fit + Cost-Realistic Backtest + Gauntlet
 
 For each surviving pair: fit the OU spread (→ half-life), backtest a z-score rule on
 **OOS** with **realistic taker costs on both legs** (cross-spread + STT + fees), then
@@ -391,7 +391,7 @@ M = pd.DataFrame({name: v["daily"] for name, v in results.items()
 if M.shape[1] >= 2 and M.shape[0] >= 4:
     print("PBO:", pbo_cscv(M, s=min(6, M.shape[0])))
 else:
-    print("not enough pairs/days for a meaningful PBO — treat single-pair results with extreme caution")"""),
+    print("not enough pairs/days for a meaningful PBO - treat single-pair results with extreme caution")"""),
 
 ("code", """\
 # ── equity curves ───────────────────────────────────────────────────────────────
@@ -403,17 +403,17 @@ plt.legend(fontsize=8); plt.title("OOS cumulative net-of-cost spread P&L (log-un
 ("md", """\
 ## Verdict checklist (be ruthless)
 
-- **DSR ≥ 0.95 and PBO ≤ 0.20**, net of cost, OOS — *and* remember DSR here is only
+- **DSR ≥ 0.95 and PBO ≤ 0.20**, net of cost, OOS - *and* remember DSR here is only
   deflated by `N_TRIALS` pairs; if you *also* swept ENTRY_Z/EXIT_Z/ZWIN, the true trial
   count is larger and DSR is optimistic. Don't sweep-and-pick.
-- **Half-life sane** (minutes-to-hours, stable) — a 1-bar half-life is noise; a
+- **Half-life sane** (minutes-to-hours, stable) - a 1-bar half-life is noise; a
   multi-day half-life can't be traded intraday on this capital.
-- **Costs didn't do all the work** — check `net_total` vs a zero-cost run; if the edge
+- **Costs didn't do all the work** - check `net_total` vs a zero-cost run; if the edge
   is razor-thin above cost, it won't survive real fills (we learned that the hard way).
 
-**If nothing clears the bar:** that's a clean, cheap kill of A1 — log it and move to the
+**If nothing clears the bar:** that's a clean, cheap kill of A1 - log it and move to the
 next candidate in `SEAT_AND_STRATEGIES.md`. **If something does:** the *only* next step is
-a queue-/cost-aware paper arm on live data — never straight to capital."""),
+a queue-/cost-aware paper arm on live data - never straight to capital."""),
 ]
 
 

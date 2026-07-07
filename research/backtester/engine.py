@@ -5,16 +5,16 @@ Event-driven, packet-by-packet simulation with a full NSE cost model.
 No third-party backtesting frameworks.
 
 Slippage convention:
-  Long  entry  — pay mid + N ticks  (crossing to ask side)
-  Long  exit   — receive mid - N ticks (crossing to bid side)
-  Short entry  — receive mid - N ticks (crossing to bid side)
-  Short exit   — pay mid + N ticks  (crossing to ask side)
+  Long  entry  - pay mid + N ticks  (crossing to ask side)
+  Long  exit   - receive mid - N ticks (crossing to bid side)
+  Short entry  - receive mid - N ticks (crossing to bid side)
+  Short exit   - pay mid + N ticks  (crossing to ask side)
 
 Exit conditions (evaluated in order):
-  1. max_hold   — packets held >= max_hold
-  2. stop       — unrealized PnL per share < -stop_ticks * TICK_SIZE
-  3. reversal   — signal flips sign beyond reversal_threshold (if enabled)
-  4. eod        — force-close any open position at the last packet
+  1. max_hold   - packets held >= max_hold
+  2. stop       - unrealized PnL per share < -stop_ticks * TICK_SIZE
+  3. reversal   - signal flips sign beyond reversal_threshold (if enabled)
+  4. eod        - force-close any open position at the last packet
 """
 
 from __future__ import annotations
@@ -35,17 +35,17 @@ TICK_SIZE: float = 0.05
 @dataclass
 class CostModel:
     """
-    NSE equity futures fee schedule (discount broker — Zerodha/Dhan style).
+    NSE equity futures fee schedule (discount broker - Zerodha/Dhan style).
 
     Brokerage is a flat per-order fee, not a percentage of notional.
     All percentage rates are as fractions of notional.
     GST (18%) applies to brokerage + exchange charges + SEBI fee.
     """
     brokerage_per_order: float = 20.0       # ₹ flat per order; 2 orders per round trip
-    stt_sell:            float = 0.000125   # 0.0125% — sell side only
-    exchange_charge:     float = 0.00002    # 0.002%  — both sides
-    sebi_fee:            float = 0.000001   # 0.0001% — both sides
-    stamp_duty_buy:      float = 0.00002    # 0.002%  — buy side only
+    stt_sell:            float = 0.000125   # 0.0125% - sell side only
+    exchange_charge:     float = 0.00002    # 0.002%  - both sides
+    sebi_fee:            float = 0.000001   # 0.0001% - both sides
+    stamp_duty_buy:      float = 0.00002    # 0.002%  - buy side only
     gst_rate:            float = 0.18       # 18% on brokerage + exchange + SEBI
     slippage_ticks:      int   = 1          # ticks of slippage per side
 
@@ -68,7 +68,7 @@ class CostModel:
     ) -> float:
         """
         Total explicit fee charges for a round trip.
-        Slippage is already captured in price difference — not repeated here.
+        Slippage is already captured in price difference - not repeated here.
         """
         qty            = lot_size * n_lots
         entry_notional = entry_price * qty

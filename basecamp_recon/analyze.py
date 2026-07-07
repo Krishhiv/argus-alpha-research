@@ -1,5 +1,5 @@
 """
-Analysis runner — the regime/trend lens on one instrument-day.
+Analysis runner - the regime/trend lens on one instrument-day.
 
 Pipeline:  load depth -> microprice -> Kalman velocity -> regime-label windows.
 Produces a summary (regime distribution, velocity per regime) and, as a B1
@@ -70,11 +70,11 @@ def run(name: str, date: str, *, data_dir: str = "/tmp/replay",
 
 
 def _print_report(name, date, df, windows, summary, out=None):
-    print(f"\n=== Regime/trend lens — {name} {date} ===")
+    print(f"\n=== Regime/trend lens - {name} {date} ===")
     print(f"packets={summary['packets']}  session≈{summary['session_secs']/3600:.1f}h  "
           f"windows={summary['windows']}")
     print(f"regime distribution: {summary['regime_distribution']}")
-    print(f"B1 pre-test — mean |trendiness| (|drift|/vol):  "
+    print(f"B1 pre-test - mean |trendiness| (|drift|/vol):  "
           f"trend-windows={summary['trend_windows_mean_trendiness']}  "
           f"chop-windows={summary['chop_windows_mean_trendiness']}")
     print("\n  window  regime        vr     hurst  trendiness  mean_vel      move    range")

@@ -1,6 +1,6 @@
 """
 CSV event logger for the paper trader.
-Appends one row per event — no in-memory accumulation, survives crashes.
+Appends one row per event - no in-memory accumulation, survives crashes.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ TRADE_FIELDS = [
     "hold_packets", "hold_secs",
     "gross_pnl", "fee", "net_pnl",
     "queue_ahead", "qty_consumed",
-    # signal context at entry (Expenture I observability — BASECAMP_RECON §1)
+    # signal context at entry (Expenture I observability - BASECAMP_RECON §1)
     "entry_sig", "entry_spread", "edge_ratio",
 ]
 

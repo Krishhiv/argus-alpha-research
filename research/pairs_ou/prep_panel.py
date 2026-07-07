@@ -1,5 +1,5 @@
 """
-Data-prep for the A1 pairs/OU research — the VPS-side, headless equivalent of
+Data-prep for the A1 pairs/OU research - the VPS-side, headless equivalent of
 01_data_prep.ipynb (no Jupyter needed; the collector venv runs this fine).
 
 Run on the VPS:

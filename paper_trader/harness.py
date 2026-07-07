@@ -1,5 +1,5 @@
 """
-Multi-arm harness construction (pure — no network/feed dependency, so it is
+Multi-arm harness construction (pure - no network/feed dependency, so it is
 unit-testable). main.py wires these into the live depth feed.
 
 An ArmRuntime bundles one arm's independent state: its own DayRisk governor,
@@ -37,7 +37,7 @@ def resolve_available(symbols: list[str]) -> dict[str, ResolvedContract]:
         try:
             contracts[sym] = resolve_contracts([sym])[sym]
         except (ValueError, KeyError) as exc:
-            log.warning("Skipping %s — cannot resolve contract: %s", sym, exc)
+            log.warning("Skipping %s - cannot resolve contract: %s", sym, exc)
     return contracts
 
 
@@ -51,7 +51,7 @@ def build_runtimes(contracts: dict[str, ResolvedContract],
     for arm in arms:
         universe = [s for s in arm.universe if s in contracts]
         if not universe:
-            log.warning("Arm %s has no resolvable instruments — skipping", arm.name)
+            log.warning("Arm %s has no resolvable instruments - skipping", arm.name)
             continue
         risk    = DayRisk(loss_limit)
         logger  = TradeLogger.for_dir(f"{base}/arms/{arm.name}")

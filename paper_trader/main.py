@@ -1,5 +1,5 @@
 """
-Argus paper trader — multi-arm entry point.
+Argus paper trader - multi-arm entry point.
 
 One Dhan depth feed (subscribed to the union of all arms' instruments) is fanned
 out to several strategy ARMS running in parallel as independent, risk-free
@@ -28,7 +28,7 @@ from paper_trader.telemetry import write_snapshot_atomic
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("argus.paper_trader")
@@ -53,7 +53,7 @@ async def async_main() -> None:
     symbols   = all_universe_symbols(arms)
     contracts = resolve_available(symbols)
     if not contracts:
-        raise RuntimeError("No instruments resolved — cannot start.")
+        raise RuntimeError("No instruments resolved - cannot start.")
     security_ids = {s: c.security_id for s, c in contracts.items()}
     log.info("Universe (%d resolved): %s", len(security_ids), security_ids)
 
@@ -63,7 +63,7 @@ async def async_main() -> None:
     stop_event = asyncio.Event()
 
     def _shutdown(sig, frame) -> None:
-        log.info("Signal %s received — force-closing all arms", sig)
+        log.info("Signal %s received - force-closing all arms", sig)
         now = datetime.now(timezone.utc)
         for rt in runtimes:
             for br in rt.brokers.values():

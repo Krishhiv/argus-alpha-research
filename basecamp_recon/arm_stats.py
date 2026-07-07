@@ -1,5 +1,5 @@
 """
-Tier A — rigorous, overfitting-aware arm evaluation.
+Tier A - rigorous, overfitting-aware arm evaluation.
 
 The discipline (BASECAMP_RECON.md §0): a multi-arm race makes the *best* arm look
 good by luck alone. Before believing any winner we subtract that luck.
@@ -8,13 +8,13 @@ Pipeline:  trades -> daily net-PnL per arm -> Sharpe / n_eff / PSR / DSR / PBO,
            plus paired arm-vs-arm diffs and block-bootstrap CIs.
 
 All P&L is `net_pnl` from the trade log, which is already net of *all* fees
-(brokerage + STT + exchange + SEBI + stamp + GST) — i.e. STT-adjusted net, as the
+(brokerage + STT + exchange + SEBI + stamp + GST) - i.e. STT-adjusted net, as the
 plan requires. We never rank on gross.
 
 Key honesty note: Basecamp gave us ~12 clean trading days. Twelve daily
 observations is a *small* sample; PSR/DSR/PBO are computed faithfully and will
 (correctly) show low statistical power. That underpowered verdict is itself a
-finding — it tells us what Expenture must still earn.
+finding - it tells us what Expenture must still earn.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 # 12 clean Basecamp data-days. Excluded: 2026-06-19 (NSE holiday), 2026-06-22
-# (Dhan depth-feed outage — 25 trades = noise), 2026-06-26 (NSE holiday).
+# (Dhan depth-feed outage - 25 trades = noise), 2026-06-26 (NSE holiday).
 CLEAN_DAYS = [
     "2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12",
     "2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18",
@@ -46,7 +46,7 @@ def _norm_cdf(z: float) -> float:
 
 
 def _norm_ppf(p: float) -> float:
-    """Inverse normal CDF — Acklam's rational approximation (|err| < 1.2e-9)."""
+    """Inverse normal CDF - Acklam's rational approximation (|err| < 1.2e-9)."""
     if not 0.0 < p < 1.0:
         return float("-inf") if p <= 0 else float("inf")
     a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
@@ -106,7 +106,7 @@ def entry_fill_rate(arm: str, data_dir: str) -> float:
     """
     Entry-side post→fill rate from the pnl log (counters are arm-wide and reset
     daily, so daily totals = per-day max). NOTE: this is the *entry* fill rate, not
-    the maker-*exit* p that gates live PnL — that one is still unmeasurable here.
+    the maker-*exit* p that gates live PnL - that one is still unmeasurable here.
     """
     paths = glob.glob(f"{data_dir}/{arm}/paper_pnl.csv")
     if not paths:
@@ -143,7 +143,7 @@ def n_eff(x: np.ndarray, max_lag: int | None = None) -> float:
         n_eff = n / (1 + 2 Σ_k rho_k),  summed over significant positive lags.
     We stop at the first non-positive autocorrelation (standard initial-positive-
     sequence truncation) to avoid summing noise. Trades are strongly
-    autocorrelated, so n_eff << raw trade count — this is the honest sample size.
+    autocorrelated, so n_eff << raw trade count - this is the honest sample size.
     """
     x = np.asarray(x, dtype=float)
     n = len(x)
@@ -325,7 +325,7 @@ def summarize_arm(arm: str, data_dir: str) -> ArmSummary:
     )
 
 
-# ── Tier C — attribution ─────────────────────────────────────────────────────────
+# ── Tier C - attribution ─────────────────────────────────────────────────────────
 
 def _agg(df: pd.DataFrame, by) -> pd.DataFrame:
     g = df.groupby(by)

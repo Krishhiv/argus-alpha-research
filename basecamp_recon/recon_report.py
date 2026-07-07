@@ -1,7 +1,7 @@
 """
-Recon I report — runs the full Tier-A/C/D analysis on the synced arm logs and
+Recon I report - runs the full Tier-A/C/D analysis on the synced arm logs and
 prints the deliverables: ranked arm table (with DSR/PBO/n_eff), paired arm-vs-arm
-verdicts (A2–A6), attribution (instrument / exit / hour), and correlation/risk.
+verdicts (A2-A6), attribution (instrument / exit / hour), and correlation/risk.
 
     python -m basecamp_recon.recon_report
     python -m basecamp_recon.recon_report --data-dir basecamp_recon/recon_data/arms
@@ -34,7 +34,7 @@ def run(data_dir: str) -> None:
 
     # ── Tier A: ranked table ──────────────────────────────────────────────────
     print("=" * 96)
-    print("RECON I  —  TIER A: RIGOROUS ARM EVALUATION")
+    print("RECON I  -  TIER A: RIGOROUS ARM EVALUATION")
     print(f"clean data-days = {len(A.CLEAN_DAYS)}  ({A.CLEAN_DAYS[0]} … {A.CLEAN_DAYS[-1]})")
     print("=" * 96)
     rows = []
@@ -69,9 +69,9 @@ def run(data_dir: str) -> None:
     print(f"\n  PBO (CSCV, {pbo['n_splits']} splits) = {pbo['pbo']:.2f}   "
           f"median OOS-logit = {pbo.get('median_logit', float('nan')):.2f}")
 
-    # ── Tier A2–A6: paired arm-vs-arm verdicts ────────────────────────────────
+    # ── Tier A2-A6: paired arm-vs-arm verdicts ────────────────────────────────
     print("\n" + "=" * 96)
-    print("PAIRED ARM-VS-ARM (daily, same market days)  —  mean diff [95% bootstrap CI], P(>0)")
+    print("PAIRED ARM-VS-ARM (daily, same market days)  -  mean diff [95% bootstrap CI], P(>0)")
     print("=" * 96)
     pairs = [
         ("A2 stop helps?",      "no_stop",   "control"),
@@ -97,7 +97,7 @@ def run(data_dir: str) -> None:
             continue
         tr = A.load_arm_trades(a, data_dir)
         print("\n" + "=" * 96)
-        print(f"TIER C — ATTRIBUTION: {a}")
+        print(f"TIER C - ATTRIBUTION: {a}")
         print("=" * 96)
         print("\n  by instrument:")
         print(A.attribution_by_instrument(tr).to_string())
@@ -108,7 +108,7 @@ def run(data_dir: str) -> None:
 
     # ── Tier D: correlation + risk ────────────────────────────────────────────
     print("\n" + "=" * 96)
-    print("TIER D — CORRELATION & DAY-TO-DAY RISK")
+    print("TIER D - CORRELATION & DAY-TO-DAY RISK")
     print("=" * 96)
     print("\n  arm daily-PnL correlation matrix:")
     print(M.corr().round(2).to_string())

@@ -1,5 +1,5 @@
 """
-Depth feature library — A1 through A7.
+Depth feature library - A1 through A7.
 
 All functions take a DataFrame produced by load_data.load_depth() and return
 a new DataFrame with additional feature columns appended. Operations are
@@ -39,7 +39,7 @@ LEVEL_IDX = np.arange(1, LEVELS + 1, dtype=float)  # 1..20 for polyfit
 
 
 # ---------------------------------------------------------------------------
-# A1 — Institutional Footprint Gradient
+# A1 - Institutional Footprint Gradient
 # ---------------------------------------------------------------------------
 
 def add_a1_gradient(df: pd.DataFrame, velocity_window: int = 10) -> pd.DataFrame:
@@ -87,7 +87,7 @@ def add_a1_gradient(df: pd.DataFrame, velocity_window: int = 10) -> pd.DataFrame
 
 
 # ---------------------------------------------------------------------------
-# A2 — Order Fragmentation Regime
+# A2 - Order Fragmentation Regime
 # ---------------------------------------------------------------------------
 
 def add_a2_fragmentation(df: pd.DataFrame, top_levels: int = 5) -> pd.DataFrame:
@@ -117,7 +117,7 @@ def add_a2_fragmentation(df: pd.DataFrame, top_levels: int = 5) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# A3 — Book Symmetry Break
+# A3 - Book Symmetry Break
 # ---------------------------------------------------------------------------
 
 def _row_kl(p: np.ndarray, q: np.ndarray) -> np.ndarray:
@@ -135,13 +135,13 @@ def add_a3_symmetry(df: pd.DataFrame, ema_alpha: float = 0.05) -> pd.DataFrame:
     symmetry_break > 0: bid side unusual → upward pressure.
     symmetry_break < 0: ask side unusual → downward pressure.
 
-    Also computed separately for top 5 vs deep (6–20) levels.
+    Also computed separately for top 5 vs deep (6-20) levels.
 
     New columns:
         a3_kl_bid_from_ask, a3_kl_ask_from_bid
         a3_symmetry_break          (full 20 levels)
-        a3_symmetry_break_top      (levels 1–5)
-        a3_symmetry_break_deep     (levels 6–20)
+        a3_symmetry_break_top      (levels 1-5)
+        a3_symmetry_break_deep     (levels 6-20)
         a3_symmetry_break_ema      (EMA smoothed)
     """
     bid = df[BID_QTY_COLS].to_numpy(float)
@@ -171,7 +171,7 @@ def add_a3_symmetry(df: pd.DataFrame, ema_alpha: float = 0.05) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# A4 — Gravity Center Migration
+# A4 - Gravity Center Migration
 # ---------------------------------------------------------------------------
 
 def add_a4_cog(df: pd.DataFrame, velocity_window: int = 10) -> pd.DataFrame:
@@ -210,13 +210,13 @@ def add_a4_cog(df: pd.DataFrame, velocity_window: int = 10) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# A5 — Level Activation Pattern
+# A5 - Level Activation Pattern
 # ---------------------------------------------------------------------------
 
 def _infer_lot_size(df: pd.DataFrame) -> float:
     """
     Infer lot size as the minimum positive L1 bid qty observed.
-    Lot size is a fixed NSE-defined constant — does not change intraday.
+    Lot size is a fixed NSE-defined constant - does not change intraday.
     """
     positive = df["bid_qty_01"][df["bid_qty_01"] > 0]
     return float(positive.min()) if len(positive) > 0 else 550.0
@@ -233,7 +233,7 @@ def add_a5_activation(
 
     size_threshold : explicitly pass this to avoid any look-ahead.
         Best practice: pass the previous day's median(bid_qty_01).
-        If None, falls back to lot size (minimum positive L1 qty) — causal,
+        If None, falls back to lot size (minimum positive L1 qty) - causal,
         but may be too low to produce meaningful variation in active_count.
         # TODO: always pass size_threshold explicitly in the backtester.
 
@@ -264,7 +264,7 @@ def add_a5_activation(
 
 
 # ---------------------------------------------------------------------------
-# A6 — Liquidity Half-Life (Impact Depth)
+# A6 - Liquidity Half-Life (Impact Depth)
 # ---------------------------------------------------------------------------
 
 def _impact_depth_vectorised(
@@ -297,7 +297,7 @@ def add_a6_impact_depth(
                       Best practice: pass previous day's median(bid_qty_01) × 10.
     order_size_lots : Used only when order_size is None. order_size is set to
                       order_size_lots × lot_size (lot_size = min positive L1 qty).
-                      Default 20 lots — causal, but calibrate against previous-day
+                      Default 20 lots - causal, but calibrate against previous-day
                       data for production use.
     # TODO: always pass order_size explicitly in the backtester.
 
@@ -336,7 +336,7 @@ def add_a6_impact_depth(
 
 
 # ---------------------------------------------------------------------------
-# Microprice (Stoikov 2018) — queue-weighted midprice
+# Microprice (Stoikov 2018) - queue-weighted midprice
 # ---------------------------------------------------------------------------
 
 def add_microprice(df: pd.DataFrame) -> pd.DataFrame:
@@ -350,7 +350,7 @@ def add_microprice(df: pd.DataFrame) -> pd.DataFrame:
 
     `micro_deviation = micro - midprice` is the signed predictor.
 
-    From IC analysis: ICIR 6.9 at h=1, mean IC 0.147 at h=10 — the strongest
+    From IC analysis: ICIR 6.9 at h=1, mean IC 0.147 at h=10 - the strongest
     single signal in this codebase.
 
     New columns:
@@ -386,7 +386,7 @@ def add_ofi_multilevel(
             = -qty_{t-1}       if price moved down  (cancellations at old bid)
             = qty_t - qty_{t-1} if price unchanged   (net flow at same level)
 
-    Symmetric for ask (sign flipped — lower ask = bullish). Weighted sum across
+    Symmetric for ask (sign flipped - lower ask = bullish). Weighted sum across
     top `n_levels` with exponential decay so L1 dominates.
 
     OFI > 0 → net buying pressure; OFI < 0 → net selling pressure.
@@ -423,7 +423,7 @@ def add_ofi_multilevel(
 # Composite signal
 # ---------------------------------------------------------------------------
 
-COMPOSITE_ZSCORE_WINDOW = 100  # packets (~30–50 seconds of history)
+COMPOSITE_ZSCORE_WINDOW = 100  # packets (~30-50 seconds of history)
 
 
 def _rolling_zscore(s: pd.Series, window: int) -> pd.Series:
@@ -506,7 +506,7 @@ def add_flow_composite(
 
 
 # ---------------------------------------------------------------------------
-# A7 — Cross-Symbol Book Resonance (pair DataFrames)
+# A7 - Cross-Symbol Book Resonance (pair DataFrames)
 # ---------------------------------------------------------------------------
 
 def add_a7_resonance(
@@ -576,14 +576,14 @@ def add_all_features(
     order_size_lots: int = 20,
 ) -> pd.DataFrame:
     """
-    Apply A1–A6 and composite signal to a single-instrument DataFrame from load_depth().
+    Apply A1-A6 and composite signal to a single-instrument DataFrame from load_depth().
 
     To avoid any look-ahead, pass size_threshold and order_size explicitly
     (e.g. derived from previous day's data). If left as None, both fall back
     to the instrument lot size (minimum positive L1 qty), which is a fixed
     NSE constant and is look-ahead-free.
 
-    Adds composite_eq as the final column — the primary trading signal.
+    Adds composite_eq as the final column - the primary trading signal.
     """
     df = add_a1_gradient(df, velocity_window=velocity_window)
     df = add_a2_fragmentation(df)

@@ -3,7 +3,7 @@ Maker (passive limit order) backtester for NSE depth-feed signals.
 
 Posts passive limit orders at L1 (best bid/ask) based on a directional signal,
 then waits for an aggressor to hit the order. Filling as a maker means
-*receiving* the bid (for a buy) or *paying* the ask (for a sell) — i.e., earning
+*receiving* the bid (for a buy) or *paying* the ask (for a sell) - i.e., earning
 the spread rather than paying it.
 
 State machine per packet
@@ -16,7 +16,7 @@ State machine per packet
 Fill rule
 ---------
 A BUY posted at price B is considered filled when at any later packet the best
-bid drops BELOW B — meaning aggressive sells consumed the level we were resting
+bid drops BELOW B - meaning aggressive sells consumed the level we were resting
 on. Symmetric for SELL at ask. This is conservative: it assumes we were at the
 back of the queue and only fill when the level is fully exhausted.
 
@@ -107,7 +107,7 @@ class MakerOrder:
 
 @dataclass
 class MakerTrade:
-    """A completed round trip — passive entry + (maker or taker) exit."""
+    """A completed round trip - passive entry + (maker or taker) exit."""
     direction:    int             # +1 long, -1 short
     entry_packet: int
     exit_packet:  int
@@ -295,7 +295,7 @@ class MakerBacktester:
             abs_sig = abs(sig)
 
             # =========================================================
-            # STATE 1: idle — consider posting an entry order
+            # STATE 1: idle - consider posting an entry order
             # =========================================================
             if position_side == 0 and pending_entry is None:
                 cooldown_ok = (i - last_exit_packet) > self.cooldown
@@ -314,7 +314,7 @@ class MakerBacktester:
                     n_posts += 1
 
             # =========================================================
-            # STATE 2: pending entry — check fill or cancel
+            # STATE 2: pending entry - check fill or cancel
             # =========================================================
             elif position_side == 0 and pending_entry is not None:
                 packets_since_post = i - pending_entry.post_packet
@@ -342,7 +342,7 @@ class MakerBacktester:
                     n_cancels    += 1
 
             # =========================================================
-            # STATE 3 & 4: in position — manage exit
+            # STATE 3 & 4: in position - manage exit
             # =========================================================
             elif position_side != 0:
                 packets_held = i - position_entry_packet
@@ -412,7 +412,7 @@ class MakerBacktester:
 
             prev_abs_sig = abs_sig
 
-        # End-of-day force close — taker
+        # End-of-day force close - taker
         if position_side != 0:
             i = n - 1
             exit_price = self.costs.effective_taker_exit_price(mid[i], position_side)

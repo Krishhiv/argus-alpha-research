@@ -1,7 +1,7 @@
 """
 Walk-forward backtesting runner and parameter grid search.
 
-Design — memory-safe streaming
+Design - memory-safe streaming
 -------------------------------
 Sessions are processed one at a time: load parquet → compute features → trim to
 3 columns (ts_ist, midprice, composite_eq) → run all parameter combos → discard.
@@ -13,7 +13,7 @@ Typical usage
 -------------
     from research.backtester.walkforward import grid_search, run_walkforward
 
-    # Sweep params — returns a DataFrame ranked by Sharpe
+    # Sweep params - returns a DataFrame ranked by Sharpe
     results = grid_search(
         param_grid={
             "entry_threshold": [0.5, 1.0, 1.5, 2.0],
@@ -23,7 +23,7 @@ Typical usage
     )
     print(results.head(10))
 
-    # Single param run — returns a WalkForwardResult
+    # Single param run - returns a WalkForwardResult
     result = run_walkforward(entry_threshold=1.0, max_hold=20, stop_ticks=5)
     print(result.summary())
 """
@@ -101,7 +101,7 @@ def _iter_sessions(
     verbose:     bool             = True,
 ) -> Generator[dict, None, None]:
     """
-    Yield one session dict at a time — never holds more than one DataFrame in RAM.
+    Yield one session dict at a time - never holds more than one DataFrame in RAM.
 
     Each dict has keys:
         df          : trimmed DataFrame with only [ts_ist, midprice, composite_eq]
@@ -143,7 +143,7 @@ def _iter_sessions(
                     print(f"  SKIP {row['underlying']} {row['date']}: composite_eq missing")
                 continue
 
-            # Trim immediately — drops 140+ depth columns we no longer need
+            # Trim immediately - drops 140+ depth columns we no longer need
             df = df[_KEEP_COLS].copy()
 
             loaded += 1
@@ -171,7 +171,7 @@ def _iter_sessions(
 
     if verbose:
         print(f"\nStreamed {loaded} sessions "
-              f"({skipped} skipped — first day per instrument)")
+              f"({skipped} skipped - first day per instrument)")
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ def run_walkforward(
 ) -> WalkForwardResult:
     """
     Stream all sessions through the backtester with fixed parameters.
-    Memory-safe — one session in RAM at a time.
+    Memory-safe - one session in RAM at a time.
 
     cooldown : minimum packets between exit and next entry (prevents churn on
                autocorrelated signals). 0 = no restriction.
@@ -334,7 +334,7 @@ def grid_search(
     combos   = list(itertools.product(*[param_grid[k] for k in keys]))
     n_combos = len(combos)
 
-    # Build one Backtester per combo — stateless across sessions, tiny objects
+    # Build one Backtester per combo - stateless across sessions, tiny objects
     backtesters = [
         Backtester(
             signal_col      = SIGNAL_COL,
@@ -350,7 +350,7 @@ def grid_search(
         for c in combos
     ]
 
-    # Per-combo accumulators — only Trade objects and (date, pnl) rows
+    # Per-combo accumulators - only Trade objects and (date, pnl) rows
     all_trades = [[] for _ in combos]
     daily_rows = [[] for _ in combos]
 

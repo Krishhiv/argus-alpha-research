@@ -1,7 +1,7 @@
 """
 Smoke tests for research/backtester/engine.py.
 
-All tests use synthetic DataFrames — no parquet files required.
+All tests use synthetic DataFrames - no parquet files required.
 """
 
 import numpy as np

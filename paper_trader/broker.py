@@ -1,5 +1,5 @@
 """
-PaperBroker — stateful per-instrument order simulator.
+PaperBroker - stateful per-instrument order simulator.
 
 One PaperBroker instance per instrument. Driven entirely by the depth feed.
 Fill detection uses Layer 1 only (depth): BUY fills when bid_price_01 drops
@@ -59,7 +59,7 @@ class DayRisk:
     Session-wide risk governor shared across all PaperBrokers in a process.
 
     Tracks aggregate day net PnL. Once it breaches loss_limit (a negative
-    number), `halted` flips True and stays True — new entries are blocked for
+    number), `halted` flips True and stays True - new entries are blocked for
     the rest of the session, but open positions still close normally. Because
     one process runs exactly one trading session (systemd start→stop), the
     object is naturally fresh each day; no explicit reset needed.
@@ -74,7 +74,7 @@ class DayRisk:
         self.day_net_pnl += net
         if not self.halted and self.day_net_pnl <= self.loss_limit:
             self.halted = True
-            log.warning("DAILY LOSS LIMIT hit (%.0f ≤ %.0f) — halting new entries",
+            log.warning("DAILY LOSS LIMIT hit (%.0f ≤ %.0f) - halting new entries",
                         self.day_net_pnl, self.loss_limit)
 
 
@@ -97,11 +97,11 @@ class StrategyParams:
     no_new_entry_ist:    str   = NO_NEW_ENTRY_IST
     exit_mode:           str   = "maker"   # "maker" | "reversal"
 
-    # Queue-aware EXIT fill (Expenture I — realistic fill model). When False
+    # Queue-aware EXIT fill (Expenture I - realistic fill model). When False
     # (default, = the Basecamp touch-fill model) a maker exit fills the instant
     # price touches the posted level. When True, the exit fills only once enough
     # volume has actually traded through our level to clear the queue ahead of us
-    # — i.e. we wait our turn in FIFO. Exits that never clear fall through to the
+    # - i.e. we wait our turn in FIFO. Exits that never clear fall through to the
     # taker fallback, which is exactly the live haircut we need to measure.
     queue_exit_fill:     bool  = False
     queue_exit_min_frac: float = 1.0    # fraction of exit queue_ahead that must trade
@@ -141,7 +141,7 @@ class _Order:
     queue_ahead:   float    # bid_qty_01 at time of post (proxy for queue depth)
     qty_consumed:  float = 0.0   # cumulative L1 qty drop since post
     role:          str = "entry"  # 'entry' or 'exit'
-    # signal context at post time (observability — fed to the regime/condition
+    # signal context at post time (observability - fed to the regime/condition
     # analysis; BASECAMP_RECON §1). Captured for the entry order only.
     sig:           float = 0.0   # micro_deviation at entry decision
     half_spread:   float = 0.0   # (ask − bid)/2 at entry
@@ -152,7 +152,7 @@ class PaperBroker:
     """
     Simulates one instrument's order flow in real time.
     Call on_depth_packet() on every depth websocket message.
-    on_market_packet() is a no-op — fill detection uses depth only.
+    on_market_packet() is a no-op - fill detection uses depth only.
     """
 
     def __init__(self, underlying: str, risk: Optional[DayRisk] = None,
@@ -228,7 +228,7 @@ class PaperBroker:
             "last_packet_age_sec": age,
         }
 
-    # ── Market feed (no-op — Dhan only allows one connection per account) ──────
+    # ── Market feed (no-op - Dhan only allows one connection per account) ──────
 
     def on_market_packet(self, ltp: float, ltt_utc: datetime,
                          recv_utc: datetime) -> None:
@@ -347,7 +347,7 @@ class PaperBroker:
                 self._close_position(taker_price, "taker_stop", i, ts_utc, mid)
 
             # Signal-reversal exit (reversal mode only): the entry thesis is dead
-            # — the microprice now points against the position. Bail at market.
+            # - the microprice now points against the position. Bail at market.
             elif (self.p.exit_mode == "reversal"
                   and self._position_side * sig < 0
                   and abs(sig) >= self.p.entry_threshold):

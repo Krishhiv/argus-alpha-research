@@ -135,7 +135,7 @@ def _iter_maker_sessions(
 
     if verbose:
         print(f"\nStreamed {loaded} sessions "
-              f"({skipped} skipped — first day per instrument)")
+              f"({skipped} skipped - first day per instrument)")
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +297,7 @@ def run_maker_walkforward(
 ) -> MakerWalkForwardResult:
     """
     Stream all sessions through the maker backtester with fixed parameters.
-    Memory-safe — one session in RAM at a time.
+    Memory-safe - one session in RAM at a time.
 
     `lot_sizes` is a per-instrument dict, e.g. {"HDFCBANK": 1100, "TCS": 175}.
     Defaults to LOT_SIZES at the top of this file. Verify against NSE circulars.
